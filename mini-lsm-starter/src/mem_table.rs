@@ -20,13 +20,13 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
-use anyhow::Result;
+use anyhow::{Ok, Result};
 use bytes::Bytes;
 use crossbeam_skiplist::SkipMap;
 use ouroboros::self_referencing;
 
 use crate::iterators::StorageIterator;
-use crate::key::KeySlice;
+use crate::key::{self, KeySlice};
 use crate::table::SsTableBuilder;
 use crate::wal::Wal;
 
@@ -53,7 +53,12 @@ pub(crate) fn map_bound(bound: Bound<&[u8]>) -> Bound<Bytes> {
 impl MemTable {
     /// Create a new mem-table.
     pub fn create(_id: usize) -> Self {
-        unimplemented!()
+        return Self {
+            map: Arc::new(SkipMap::new()),
+            wal: None,
+            id: _id,
+            approximate_size: Arc::new(AtomicUsize::new(0)),
+        };
     }
 
     /// Create a new mem-table with WAL
@@ -87,7 +92,7 @@ impl MemTable {
 
     /// Get a value by key.
     pub fn get(&self, _key: &[u8]) -> Option<Bytes> {
-        unimplemented!()
+        self.map.get(_key).map(|e| e.value().clone())
     }
 
     /// Put a key-value pair into the mem-table.
@@ -96,7 +101,14 @@ impl MemTable {
     /// In week 2, day 6, also flush the data to WAL.
     /// In week 3, day 5, modify the function to use the batch API.
     pub fn put(&self, _key: &[u8], _value: &[u8]) -> Result<()> {
-        unimplemented!()
+        let key = Bytes::copy_from_slice(_key);
+        let value = Bytes::copy_from_slice(_value);
+        self.map.insert(key, value);
+        self.approximate_size.fetch_add(
+            _value.len() + _key.len(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        Ok(())
     }
 
     /// Implement this in week 3, day 5; if you want to implement this earlier, use `&[u8]` as the key type.
@@ -153,24 +165,27 @@ pub struct MemTableIterator {
     iter: SkipMapRangeIter<'this>,
     /// Stores the current key-value pair.
     item: (Bytes, Bytes),
+    is_valid: bool,
 }
 
 impl StorageIterator for MemTableIterator {
     type KeyType<'a> = KeySlice<'a>;
 
     fn value(&self) -> &[u8] {
-        unimplemented!()
+        let (_, value) = self.borrow_item();
+        value
     }
 
     fn key(&self) -> KeySlice {
-        unimplemented!()
+        let (key, _) = self.borrow_item();
+        key::Key::from_slice(&key)
     }
 
     fn is_valid(&self) -> bool {
-        unimplemented!()
+        self.borrow_is_valid().clone()
     }
 
     fn next(&mut self) -> Result<()> {
-        unimplemented!()
+        self.with_iter_mut(| )
     }
 }

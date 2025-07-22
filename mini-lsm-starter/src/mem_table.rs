@@ -186,6 +186,20 @@ impl StorageIterator for MemTableIterator {
     }
 
     fn next(&mut self) -> Result<()> {
-        self.with_iter_mut(| )
+        let item = self.with_iter_mut(|iter| -> Option<(Bytes, Bytes)> {
+            iter.next()
+                .map(|e| (e.key().to_owned(), e.value().to_owned()))
+        });
+        match item {
+            Some(s) => {
+                self.with_is_valid_mut(|e| *e = true);
+                self.with_item_mut(|e| *e = s);
+                Ok(())
+            }
+            None => {
+                self.with_is_valid_mut(|e| *e = false);
+                Err(anyhow::anyhow!("Iterator reached end"))
+            }
+        }
     }
 }

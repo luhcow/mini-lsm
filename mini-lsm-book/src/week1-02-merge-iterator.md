@@ -2,61 +2,61 @@
   mini-lsm-book © 2022-2025 by Alex Chi Z is licensed under CC BY-NC-SA 4.0
 -->
 
-# Merge Iterator
+# 合并迭代器
 
-![Chapter Overview](./lsm-tutorial/week1-02-overview.svg)
+![第章节概览](./lsm-tutorial/week1-02-overview.svg)
 
-In this chapter, you will:
+在本章中，您将：
 
-* Implement memtable iterator.
-* Implement merge iterator.
-* Implement LSM read path `scan` for memtables.
+* 实现内存表迭代器。
+* 实现合并迭代器。
+* 为内存表实现 LSM 读路径 `scan`。
 
-To copy the test cases into the starter code and run them,
+要将测试用例复制到启动代码并运行：
 
 ```
 cargo x copy-test --week 1 --day 2
 cargo x scheck
 ```
 
-## Task 1: Memtable Iterator
+## 任务 1：内存表迭代器
 
-In this chapter, we will implement the LSM `scan` interface. `scan` returns a range of key-value pairs in order using an iterator API. In the previous chapter, you have implemented the `get` API and the logic to create immutable memtables, and your LSM state should now have multiple memtables. You will need to first create iterators on a single memtable, then create a merge iterator on all memtables, and finally implement the range limit for the iterators.
+在本章中，我们将实现 LSM 的 `scan` 接口。`scan` 使用迭代器 API 按顺序返回一系列键值对。在前一章中，您已经实现了 `get` API 和创建不可变内存表的逻辑，现在您的 LSM 状态应该有多个内存表。您需要首先在单个内存表上创建迭代器，然后在所有内存表上创建一个合并迭代器，最后为迭代器实现范围限制。
 
-In this task, you will need to modify:
+在此任务中，您需要修改：
 
 ```
 src/mem_table.rs
 ```
 
-All LSM iterators implement the `StorageIterator` trait. It has 4 functions: `key`, `value`, `next`, and `is_valid`. If you're familiar with Rust's standard library `Iterator` trait, you might find `StorageIterator` a bit different. Instead, `StorageIterator` employs a cursor-based API, a design pattern common in database systems and notably inspired by RocksDB's iterators (see [`iterator_base.h`](https://github.com/facebook/rocksdb/blob/main/include/rocksdb/iterator_base.h) and [`iterator.h`](https://github.com/facebook/rocksdb/blob/main/include/rocksdb/iterator.h) for reference).
+所有 LSM 迭代器都实现 `StorageIterator` trait。它有 4 个函数：`key`、`value`、`next` 和 `is_valid`。如果您熟悉 Rust 标准库的 `Iterator` trait，您可能会发现 `StorageIterator` 有些不同。实际上，`StorageIterator` 采用基于游标的 API，这是数据库系统中常见的设计模式，特别是受到 RocksDB 迭代器的启发（参见 [`iterator_base.h`](https://github.com/facebook/rocksdb/blob/main/include/rocksdb/iterator_base.h) 和 [`iterator.h`](https://github.com/facebook/rocksdb/blob/main/include/rocksdb/iterator.h) 作为参考）。
 
-When the iterator is created, its cursor will stop on some element, and `key` / `value` will return the first key in the memtable/block/SST satisfying the start condition (i.e., start key). These two interfaces will return a `&[u8]` to avoid copy.
+当迭代器被创建时，它的游标会停在某个元素上，`key` / `value` 将返回内存表/块/SST 中满足起始条件（即起始键）的第一个键。这两个接口将返回 `&[u8]` 以避免复制。
 
-From the caller's perspective, the typical usage pattern is:
+从调用者的角度来看，典型的使用方式是：
 
 ```rust
 let mut iter: impl StorageIterator = ...;
 while iter.is_valid() {
     let key = iter.key();
     let value = iter.value();
-    // Process key and value
-    iter.next()?; // Advance to the next item, handling potential errors
+    // 处理键和值
+    iter.next()?; // 前进到下一项，处理潜在的错误
 }
 ```
 
-The semantics of `StorageIterator` are distinct for its core methods:
+`StorageIterator` 的核心方法有不同的语义：
 
-* `next()`: This method is solely responsible for attempting to move the cursor to the next element. It returns a `Result` to report any errors encountered during this advancement (e.g., I/O issues). It does *not* inherently guarantee that the new position is valid, only that the attempt to move was made.
-* `is_valid()`: This method indicates whether the iterator's current cursor points to a valid data element. It does *not* advance the iterator.
+* `next()`：此方法仅负责尝试将游标移动到下一个元素。它返回 `Result` 以报告此过程中遇到的任何错误（例如 I/O 问题）。它不能保证新位置是有效的，只是表示尝试移动已进行。
+* `is_valid()`：此方法指示迭代器的当前游标是否指向有效的数据元素。它不会推进迭代器。
 
-Therefore, as an implementer of `StorageIterator`, after each call to `next()` (even if it succeeds without an error from the `next()` operation itself), you are responsible for updating the internal state so that `is_valid()` correctly reflects whether the new cursor position actually points to a valid item.
+因此，作为 `StorageIterator` 的实现者，在每次调用 `next()`（即使从 `next()` 操作本身返回成功）之后，您有责任更新内部状态，以便 `is_valid()` 正确反映新游标位置是否实际指向有效项。
 
-In summary, `next` moves the cursor to the next place. `is_valid` returns if the iterator has reached the end or errored. You can assume `next` will only be called when `is_valid` returns true. There will be a `FusedIterator` wrapper for iterators that block calls to `next` when the iterator is not valid to avoid users from misusing the iterators.
+总结一下，`next` 将游标移动到下一个位置。`is_valid` 返回迭代器是否已到达末尾或出错。您可以假设仅在 `is_valid` 返回 true 时才会调用 `next`。将有一个 `FusedIterator` 包装器用于迭代器，当迭代器无效时阻止对 `next` 的调用，以避免用户滥用迭代器。
 
-Back to the memtable iterator. You should have found out that the iterator does not have any lifetime associated with that. Imagine that you create a `Vec<u64>` and call `vec.iter()`, the iterator type will be something like `VecIterator<'a>`, where `'a` is the lifetime of the `vec` object. The same applies to `SkipMap`, where its `iter` API returns an iterator with a lifetime. However, in our case, we do not want to have such lifetimes on our iterators to avoid making the system overcomplicated (and hard to compile...).
+回到内存表迭代器。您应该已经发现迭代器没有任何与之关联的生命周期。想象您创建一个 `Vec<u64>` 并调用 `vec.iter()`，迭代器类型会是类似 `VecIterator<'a>` 的东西，其中 `'a` 是 `vec` 对象的生命周期。同样适用于 `SkipMap`，其 `iter` API 返回一个带有生命周期的迭代器。但是，在我们的情况下，我们不希望在迭代器上有这样的生命周期，以避免使系统过于复杂（并难以编译...）。
 
-If the iterator does not have a lifetime generics parameter, we should ensure that *whenever the iterator is being used, the underlying skiplist object is not freed*. The only way to achieve that is to put the `Arc<SkipMap>` object into the iterator itself. To define such a structure,
+如果迭代器没有生命周期泛型参数，我们应该确保 *无论何时使用迭代器，底层跳表对象都不会被释放*。实现这一点的唯一方法是将 `Arc<SkipMap>` 对象放入迭代器本身。要定义这样的结构：
 
 ```rust,no_run
 pub struct MemtableIterator {
@@ -65,34 +65,34 @@ pub struct MemtableIterator {
 }
 ```
 
-Okay, here is the problem: we want to express that the lifetime of the iterator is the same as the `map` in the structure. How can we do that?
+好的，问题来了：我们想要表达迭代器的生命周期与结构中的 `map` 相同。我们如何做到这一点？
 
-This is the first and most tricky Rust language thing that you will ever meet in this course -- self-referential structure. If it is possible to write something like:
+这是您在本课程中会遇到的第一个也是最棘手的 Rust 语言问题 -- 自引用结构。如果可能写成这样的东西：
 
 ```rust,no_run
-pub struct MemtableIterator { // <- with lifetime 'this
+pub struct MemtableIterator { // <- 带有生命周期 'this
     map: Arc<SkipMap<Bytes, Bytes>>,
     iter: SkipMapRangeIter<'this>,
 }
 ```
 
-Then the problem is solved! You can do this with the help of some third-party libraries like `ouroboros`. It provides an easy way to define self-referential structure. It is also possible to do this with unsafe Rust (and indeed, `ouroboros` itself uses unsafe Rust internally...)
+那么问题就解决了！您可以借助一些第三方库（如 `ouroboros`）来实现这一点。它提供了一个简单的方式来定义自引用结构。也可以用不安全的 Rust 来做这件事（实际上，`ouroboros` 本身在内部使用不安全的 Rust...）
 
-We have leveraged [`ouroboros`](https://docs.rs/ouroboros/latest/ouroboros/attr.self_referencing.html) to define the self-referential `MemtableIterator` fields for you. You will need to implement the `MemtableIterator` logic and the `Memtable::scan` API based on this provided structure.
+我们已经利用 [`ouroboros`](https://docs.rs/ouroboros/latest/ouroboros/attr.self_referencing.html) 为您定义了自引用的 `MemtableIterator` 字段。您需要基于提供的结构实现 `MemtableIterator` 逻辑和 `Memtable::scan` API。
 
-## Task 2: Merge Iterator
+## 任务 2：合并迭代器
 
-In this task, you will need to modify:
+在此任务中，您需要修改：
 
 ```
 src/iterators/merge_iterator.rs
 ```
 
-Now that you have multiple memtables and you will create multiple memtable iterators. You will need to merge the results from the memtables and return the latest version of each key to the user.
+既然您有多个内存表，您需要创建多个内存表迭代器。您需要合并来自内存表的结果，并向用户返回每个键的最新版本。
 
-`MergeIterator` maintains a binary heap internally. Consider the challenge of merging `n` sorted sequences (our iterators) into a single sorted output; a binary heap is a natural fit here, as it efficiently helps identify which sequence currently holds the overall smallest element. You'll see that the ordering of the binary heap is such that the iterator with the lowest head key value is first. When multiple iterators have the same head key value, the newest one is first. Note that you will need to handle errors (i.e., when an iterator is not valid) and ensure that the latest version of a key-value pair comes out.
+`MergeIterator` 在内部维护一个二叉堆。考虑合并 `n` 个排序序列（我们的迭代器）成单个排序输出的挑战；二叉堆是一个自然的选择，因为它可以有效地帮助识别哪个序列当前持有总体最小元素。您会看到二叉堆的排序方式是持有最低头键值的迭代器优先。当多个迭代器具有相同的头键值时，最新的优先。请注意，您需要处理错误（即，当迭代器无效时）并确保键值对的最新版本输出。
 
-For example, if we have the following data:
+例如，如果我们有以下数据：
 
 ```
 iter1: b->del, c->4, d->5
@@ -100,89 +100,89 @@ iter2: a->1, b->2, c->3
 iter3: e->4
 ```
 
-The sequence that the merge iterator outputs should be:
+合并迭代器输出的序列应该是：
 
 ```
 a->1, b->del, c->4, d->5, e->4
 ```
 
-The constructor of the merge iterator takes a vector of iterators. We assume the one with a lower index (i.e., the first one) has the latest data.
+合并迭代器的构造函数接受一个迭代器向量。我们假设索引较低的迭代器（即第一个）具有最新的数据。
 
-When using the Rust binary heap, you may find the `peek_mut` function useful.
+使用 Rust 二叉堆时，您可能会发现 `peek_mut` 函数很有用。
 
 ```rust,no_run
 let Some(mut inner) = heap.peek_mut() {
-    *inner += 1; // <- do some modifications to the inner item
+    *inner += 1; // <- 对内部项进行一些修改
 }
-// When the PeekMut reference gets dropped, the binary heap gets reordered automatically.
+// 当 PeekMut 引用被丢弃时，二叉堆会自动重新排序。
 
 let Some(mut inner) = heap.peek_mut() {
-    PeekMut::pop(inner) // <- pop it out from the heap
+    PeekMut::pop(inner) // <- 从堆中弹出它
 }
 ```
 
-One common pitfall is on error handling. For example,
+一个常见的陷阱是错误处理。例如：
 
 ```rust,no_run
 let Some(mut inner_iter) = self.iters.peek_mut() {
-    inner_iter.next()?; // <- will cause problem
+    inner_iter.next()?; // <- 会导致问题
 }
 ```
 
-If `next` returns an error (i.e., due to disk failure, network failure, checksum error, etc.), it is no longer valid. However, when we go out of the if condition and return the error to the caller, `PeekMut`'s drop will try move the element within the heap, which causes an access to an invalid iterator. Therefore, you will need to do all error handling by yourself instead of using `?` within the scope of `PeekMut`.
+如果 `next` 返回错误（例如由于磁盘故障、网络故障、校验和错误等），它就不再有效了。但是，当我们走出 if 条件并将错误返回给调用者时，`PeekMut` 的 drop 会尝试在堆中移动元素，这会导致访问无效迭代器。因此，您需要自己处理所有错误处理，而不是在 `PeekMut` 的作用域内使用 `?`。
 
-We want to avoid dynamic dispatch as much as possible, and therefore we do not use `Box<dyn StorageIterator>` in the system. Instead, we prefer static dispatch using generics. Also note that `StorageIterator` uses generic associated type (GAT), so that it can support both `KeySlice` and `&[u8]` as the key type. We will change `KeySlice` to include the timestamp in week 3 and using a separate type for it now can make the transition more smooth.
+我们希望尽可能避免动态分派，因此我们在系统中不使用 `Box<dyn StorageIterator>`。相反，我们倾向于使用泛型进行静态分派。另请注意，`StorageIterator` 使用通用关联类型 (GAT)，以便它可以支持 `KeySlice` 和 `&[u8]` 作为键类型。我们将在第 3 周将 `KeySlice` 更改为包含时间戳，现在为其使用单独的类型可以使过渡更加平顺。
 
-Starting this section, we will use `Key<T>` to represent LSM key types and distinguish them from values in the type system. You should use provided APIs of `Key<T>` instead of directly accessing the inner value. We will add timestamp to this key type in part 3, and using the key abstraction will make the transition more smooth. For now, `KeySlice` is equivalent to `&[u8]`, `KeyVec` is equivalent to `Vec<u8>`, and `KeyBytes` is equivalent to `Bytes`.
+从本部分开始，我们将使用 `Key<T>` 来表示 LSM 键类型，并将其与类型系统中的值区分开来。您应该使用 `Key<T>` 的提供的 API，而不是直接访问内部值。我们将在第 3 部分向该键类型添加时间戳，使用键抽象将使过渡更加平顺。现在，`KeySlice` 等价于 `&[u8]`，`KeyVec` 等价于 `Vec<u8>`，`KeyBytes` 等价于 `Bytes`。
 
-## Task 3: LSM Iterator + Fused Iterator
+## 任务 3：LSM 迭代器 + 熔合迭代器
 
-In this task, you will need to modify:
+在此任务中，您需要修改：
 
 ```
 src/lsm_iterator.rs
 ```
 
-We use the `LsmIterator` structure to represent the internal LSM iterators. You will need to modify this structure multiple times throughout the course when more iterators are added into the system. For now, because we only have multiple memtables, it should be defined as:
+我们使用 `LsmIterator` 结构来表示内部 LSM 迭代器。在整个课程中，当更多迭代器添加到系统时，您将需要多次修改此结构。现在，因为我们只有多个内存表，它应该定义为：
 
 ```rust,no_run
 type LsmIteratorInner = MergeIterator<MemTableIterator>;
 ```
 
-You may go ahead and implement the `LsmIterator` structure, which calls the corresponding inner iterator, and also skip deleted keys.
+您可以继续实现 `LsmIterator` 结构，它调用相应的内部迭代器，并跳过已删除的键。
 
-We do not test `LsmIterator` in this task. There will be an integration test in task 4.
+我们在此任务中不测试 `LsmIterator`。任务 4 中将有一个集成测试。
 
-Then, we want to provide extra safety on the iterator to avoid users from misusing them. Users should not call `key`, `value`, or `next` when the iterator is not valid. At the same time, they should not use the iterator anymore if `next` returns an error. `FusedIterator` is a wrapper around an iterator to normalize the behaviors across all iterators. You can go ahead and implement it by yourself.
+然后，我们想在迭代器上提供额外的安全性，以避免用户滥用它们。用户不应该在迭代器无效时调用 `key`、`value` 或 `next`。同时，如果 `next` 返回错误，他们不应该再使用迭代器。`FusedIterator` 是迭代器周围的包装器，用于规范化所有迭代器的行为。您可以继续自己实现它。
 
-## Task 4: Read Path - Scan
+## 任务 4：读路径 - Scan
 
-In this task, you will need to modify:
+在此任务中，您需要修改：
 
 ```
 src/lsm_storage.rs
 ```
 
-We are finally there -- with all iterators you have implemented, you can finally implement the `scan` interface of the LSM engine. You can simply construct an LSM iterator with the memtable iterators (remember to put the latest memtable at the front of the merge iterator), and your storage engine will be able to handle the scan request.
+我们终于到了 -- 有了您已实现的所有迭代器，您最终可以实现 LSM 引擎的 `scan` 接口。您可以简单地使用内存表迭代器构造 LSM 迭代器（记住将最新的内存表放在合并迭代器的前面），您的存储引擎将能够处理扫描请求。
 
-## Test Your Understanding
+## 测试您的理解
 
-* What is the time/space complexity of using your merge iterator?
-* Why do we need a self-referential structure for memtable iterator?
-* If a key is removed (there is a delete tombstone), do you need to return it to the user? Where did you handle this logic?
-* If a key has multiple versions, will the user see all of them? Where did you handle this logic?
-* If we want to get rid of self-referential structure and have a lifetime on the memtable iterator (i.e., `MemtableIterator<'a>`, where `'a` = memtable or `LsmStorageInner` lifetime), is it still possible to implement the `scan` functionality?
-* What happens if (1) we create an iterator on the skiplist memtable (2) someone inserts new keys into the memtable (3) will the iterator see the new key?
-* What happens if your key comparator cannot give the binary heap implementation a stable order?
-* Why do we need to ensure the merge iterator returns data in the iterator construction order?
-* Is it possible to implement a Rust-style iterator (i.e., `next(&self) -> (Key, Value)`) for LSM iterators? What are the pros/cons?
-* The scan interface is like `fn scan(&self, lower: Bound<&[u8]>, upper: Bound<&[u8]>)`. How to make this API compatible with Rust-style range (i.e., `key_a..key_b`)? If you implement this, try to pass a full range `..` to the interface and see what will happen.
-* The starter code provides the merge iterator interface to store `Box<I>` instead of `I`. What might be the reason behind that?
+* 使用您的合并迭代器的时间/空间复杂度是多少？
+* 为什么我们需要内存表迭代器的自引用结构？
+* 如果键被删除（有删除墓碑），您需要将其返回给用户吗？您在何处处理了此逻辑？
+* 如果键有多个版本，用户会看到所有版本吗？您在何处处理了此逻辑？
+* 如果我们想摆脱自引用结构并在内存表迭代器上有生命周期（即 `MemtableIterator<'a>`，其中 `'a` = 内存表或 `LsmStorageInner` 生命周期），是否仍可能实现 `scan` 功能？
+* 如果 (1) 我们在跳表内存表上创建迭代器 (2) 有人将新键插入内存表 (3) 迭代器会看到新键吗？
+* 如果您的键比较器无法为二叉堆实现提供稳定的顺序会发生什么？
+* 为什么我们需要确保合并迭代器按迭代器构造顺序返回数据？
+* 是否可以为 LSM 迭代器实现 Rust 风格的迭代器（即 `next(&self) -> (Key, Value)`）？优点和缺点是什么？
+* scan 接口类似于 `fn scan(&self, lower: Bound<&[u8]>, upper: Bound<&[u8]>)`。如何使此 API 与 Rust 风格的范围兼容（即 `key_a..key_b`）？如果您实现了这个，尝试将完整范围 `..` 传递给接口，看看会发生什么。
+* 启动代码提供合并迭代器接口来存储 `Box<I>` 而不是 `I`。这背后的原因可能是什么？
 
-We do not provide reference answers to the questions, and feel free to discuss about them in the Discord community.
+我们不提供问题的参考答案，欢迎在 Discord 社区中讨论它们。
 
-## Bonus Tasks
+## 奖励任务
 
-* **Foreground Iterator.** In this course we assumed that all operations are short, so that we can hold reference to mem-table in the iterator. If an iterator is held by users for a long time, the whole mem-table (which might be 256MB) will stay in the memory even if it has been flushed to disk. To solve this, we can provide a `ForegroundIterator` / `LongIterator` to our user. The iterator will periodically create new underlying storage iterator so as to allow garbage collection of the resources.
+* **前台迭代器。** 在本课程中，我们假设所有操作都很短，以便我们可以在迭代器中持有对内存表的引用。如果迭代器被用户持有很长时间，整个内存表（可能是 256MB）即使已被刷新到磁盘也会保留在内存中。为了解决这个问题，我们可以为用户提供一个 `ForegroundIterator` / `LongIterator`。迭代器将定期创建新的底层存储迭代器，以允许资源的垃圾回收。
 
 {{#include copyright.md}}

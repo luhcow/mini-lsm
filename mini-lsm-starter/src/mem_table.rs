@@ -24,6 +24,7 @@ use anyhow::{Ok, Result};
 use bytes::Bytes;
 use crossbeam_skiplist::SkipMap;
 use ouroboros::self_referencing;
+use serde_json::value;
 
 use crate::iterators::StorageIterator;
 use crate::key::{self, KeySlice};
@@ -125,7 +126,15 @@ impl MemTable {
 
     /// Get an iterator over a range of keys.
     pub fn scan(&self, _lower: Bound<&[u8]>, _upper: Bound<&[u8]>) -> MemTableIterator {
-        unimplemented!()
+        let mut iter = MemTableIteratorBuilder {
+            map: self.map.clone(),
+            iter_builder: |_map| _map.range((map_bound(_lower), map_bound(_upper))),
+            item: (Bytes::new(), Bytes::new()),
+            is_valid: false,
+        }
+        .build();
+        let _ = iter.next();
+        iter
     }
 
     /// Flush the mem-table to SSTable. Implement in week 1 day 6.
@@ -194,12 +203,11 @@ impl StorageIterator for MemTableIterator {
             Some(s) => {
                 self.with_is_valid_mut(|e| *e = true);
                 self.with_item_mut(|e| *e = s);
-                Ok(())
             }
             None => {
                 self.with_is_valid_mut(|e| *e = false);
-                Err(anyhow::anyhow!("Iterator reached end"))
             }
-        }
+        };
+        Ok(())
     }
 }

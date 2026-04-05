@@ -409,7 +409,7 @@ impl LsmStorageInner {
             let guard = self.state.read();
             Arc::clone(&guard)
         }; // drop global lock here
-        let mut iters:Vec<Box<mem_table::MemTableIterator>> = snapshot
+        let mut iters: Vec<Box<mem_table::MemTableIterator>> = snapshot
             .imm_memtables
             .iter()
             .map(|it| Box::new(it.scan(_lower, _upper)))

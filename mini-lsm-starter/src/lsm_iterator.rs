@@ -31,7 +31,11 @@ pub struct LsmIterator {
 
 impl LsmIterator {
     pub(crate) fn new(iter: LsmIteratorInner) -> Result<Self> {
-        Ok(Self { inner: iter })
+        let mut iter = Self { inner: iter };
+        while iter.is_valid() && iter.value().is_empty() {
+            iter.next()?;
+        }
+        Ok(iter)
     }
 }
 
@@ -39,22 +43,43 @@ impl StorageIterator for LsmIterator {
     type KeyType<'a> = &'a [u8];
 
     fn is_valid(&self) -> bool {
-        self.inner.is_valid()
+        let valid = self.inner.is_valid();
+        eprintln!("[LsmIterator] is_valid: {}", valid);
+        valid
     }
 
     fn key(&self) -> &[u8] {
-        self.inner.key().raw_ref()
+        let key = self.inner.key().raw_ref();
+        eprintln!("[LsmIterator] key: {:?}", String::from_utf8_lossy(key));
+        key
     }
 
     fn value(&self) -> &[u8] {
-        self.inner.value()
+        let value = self.inner.value();
+        eprintln!("[LsmIterator] value: {} bytes", value.len());
+        value
     }
 
     fn next(&mut self) -> Result<()> {
+        eprintln!("[LsmIterator] next() called");
         self.inner.next()?;
-        while self.value().is_empty() {
+        eprintln!("[LsmIterator] inner.next() completed");
+        let mut skip_count = 0;
+        while self.is_valid() && self.value().is_empty() {
+            eprintln!(
+                "[LsmIterator] value is empty, skipping (count: {})",
+                skip_count
+            );
             self.inner.next()?;
+            skip_count += 1;
         }
+        if skip_count > 0 {
+            eprintln!("[LsmIterator] skipped {} empty values", skip_count);
+        }
+        eprintln!(
+            "[LsmIterator] next() finished, current key: {:?}",
+            String::from_utf8_lossy(self.key())
+        );
         Ok(())
     }
 }
@@ -69,6 +94,7 @@ pub struct FusedIterator<I: StorageIterator> {
 
 impl<I: StorageIterator> FusedIterator<I> {
     pub fn new(iter: I) -> Self {
+        eprintln!("[FusedIterator] Creating new FusedIterator");
         Self {
             iter,
             has_errored: false,
@@ -83,27 +109,41 @@ impl<I: StorageIterator> StorageIterator for FusedIterator<I> {
         Self: 'a;
 
     fn is_valid(&self) -> bool {
-        !self.has_errored && self.iter.is_valid()
+        let valid = !self.has_errored && self.iter.is_valid();
+        eprintln!(
+            "[FusedIterator] is_valid: {} (errored: {})",
+            valid, self.has_errored
+        );
+        valid
     }
 
     fn key(&self) -> Self::KeyType<'_> {
+        eprintln!("[FusedIterator] key access");
         self.iter.key()
     }
 
     fn value(&self) -> &[u8] {
+        eprintln!("[FusedIterator] value access");
         self.iter.value()
     }
 
     fn next(&mut self) -> Result<()> {
+        eprintln!("[FusedIterator] next() called");
         // only move when the iterator is valid and not errored
         if self.has_errored {
+            eprintln!("[FusedIterator] Iterator is tainted, returning error");
             bail!("the iterator is tainted");
         }
         if self.iter.is_valid() {
+            eprintln!("[FusedIterator] Iterator is valid, advancing");
             if let Err(e) = self.iter.next() {
+                eprintln!("[FusedIterator] Error occurred during next(), marking as tainted");
                 self.has_errored = true;
                 return Err(e);
             }
+            eprintln!("[FusedIterator] Successfully advanced");
+        } else {
+            eprintln!("[FusedIterator] Iterator is invalid, skipping next()");
         }
         Ok(())
     }

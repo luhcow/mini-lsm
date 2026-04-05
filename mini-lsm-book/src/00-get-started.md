@@ -2,42 +2,42 @@
   mini-lsm-book © 2022-2025 by Alex Chi Z is licensed under CC BY-NC-SA 4.0
 -->
 
-# Environment Setup
+# 环境设置
 
-The starter code and reference solution is available at [https://github.com/skyzh/mini-lsm](https://github.com/skyzh/mini-lsm).
+启动代码和参考解决方案可在 [https://github.com/skyzh/mini-lsm](https://github.com/skyzh/mini-lsm) 获取。
 
-## Install Rust
+## 安装 Rust
 
-See [https://rustup.rs](https://rustup.rs) for more information.
+请参见 [https://rustup.rs](https://rustup.rs) 获取更多信息。
 
-## Clone the repo
+## 克隆仓库
 
 ```
 git clone https://github.com/skyzh/mini-lsm
 ```
 
-## Starter code
+## 启动代码
 
 ```
 cd mini-lsm/mini-lsm-starter
 code .
 ```
 
-## Install Tools
+## 安装工具
 
-You will need the latest stable Rust to compile this project. The minimum requirement is `1.74`.
+您需要最新的稳定版 Rust 来编译此项目。最低要求是 `1.74`。
 
 ```
 cargo x install-tools
 ```
 
-## Run tests
+## 运行测试
 
 ```
 cargo x copy-test --week 1 --day 1
 cargo x scheck
 ```
 
-Now, you can go ahead and start [Week 1: Mini-LSM](./week1-overview.md).
+现在，您可以开始 [第 1 周：Mini-LSM](./week1-overview.md)。
 
 {{#include copyright.md}}

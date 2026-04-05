@@ -2,91 +2,82 @@
   mini-lsm-book © 2022-2025 by Alex Chi Z is licensed under CC BY-NC-SA 4.0
 -->
 
-# Preface
+# 前言
 
-![Banner](./mini-lsm-logo.png)
+![横幅](./mini-lsm-logo.png)
 
-This course teaches you how to build a simple LSM-Tree storage engine in Rust.
+本课程教您如何在 Rust 中构建一个简单的 LSM-Tree 存储引擎。
 
-## What is LSM, and Why LSM?
+## 什么是 LSM，为什么是 LSM？
 
-Log-structured merge trees are data structures that maintain key-value pairs. This data structure is widely used in
-distributed database systems like [TiDB](https://www.pingcap.com) and [CockroachDB](https://www.cockroachlabs.com) as
-their underlying storage engine. [RocksDB](http://rocksdb.org), based on [LevelDB](https://github.com/google/leveldb),
-is an implementation of LSM-Tree storage engines. It provides many key-value access functionalities and is
-used in many production systems.
+日志结构化合并树是维护键值对的数据结构。这种数据结构在分布式数据库系统中广泛使用，如 [TiDB](https://www.pingcap.com) 和 [CockroachDB](https://www.cockroachlabs.com) 作为其底层存储引擎。[RocksDB](http://rocksdb.org) 基于 [LevelDB](https://github.com/google/leveldb)，是 LSM-Tree 存储引擎的实现。它提供了许多键值访问功能，并在许多生产系统中使用。
 
-Generally speaking, LSM Tree is an append-friendly data structure. It is more intuitive to compare LSM to other
-key-value data structures like RB-Tree and B-Tree. For RB-Tree and B-Tree, all data operations are in place. That is to
-say, when you want to update the value corresponding to the key, the engine will overwrite its original memory or disk
-space with the new value. But in an LSM Tree, all write operations, i.e., insertions, updates, deletions, are lazily applied to the storage.
-The engine batches these operations into SST (sorted string table) files and writes them to the disk. Once written to the
-disk, the engine will not directly modify them. In a particular background task called compaction, the engine will merge these files to apply the updates and deletions.
+一般来说，LSM Tree 是一种追加友好的数据结构。将 LSM 与其他键值数据结构如 RB-Tree 和 B-Tree 进行比较更直观。对于 RB-Tree 和 B-Tree，所有数据操作都是就地进行的。也就是说，当您想要更新键对应的值时，引擎将用新值覆盖其原始内存或磁盘空间。但在 LSM Tree 中，所有写入操作，即插入、更新、删除，都是懒惰地应用于存储。引擎将这些操作批处理到 SST（排序字符串表）文件中并写入磁盘。一旦写入磁盘，引擎将不会直接修改它们。在一个称为压缩的特定后台任务中，引擎将合并这些文件以应用更新和删除。
 
-This architectural design makes LSM trees easy to work with.
+这种架构设计使 LSM 树易于使用。
 
-1. Data are immutable on persistent storage. Concurrency control is more straightforward. Offloading the background tasks (compaction) to remote servers is possible. Storing and serving data directly from cloud-native storage systems like S3 is also feasible.
-2. Changing the compaction algorithm allows the storage engine to balance between read, write, and space amplification. The data structure is versatile, and by adjusting the compaction parameters, we can optimize the LSM structure for different workloads.
+1. 数据在持久存储上是不可变的。并发控制更简单。将后台任务（压缩）卸载到远程服务器是可能的。从云原生存储系统如 S3 直接存储和服务数据也是可行的。
+2. 改变压缩算法允许存储引擎在读取、写入和空间放大之间平衡。该数据结构是通用的，通过调整压缩参数，我们可以针对不同工作负载优化 LSM 结构。
 
-This course will teach you how to build an LSM-tree-based storage engine in the Rust programming language.
+本课程将教您如何在 Rust 编程语言中构建基于 LSM-Tree 的存储引擎。
 
-## Prerequisites
+## 先决条件
 
-* You should know the basics of the Rust programming language. Reading [the Rust book](https://doc.rust-lang.org/book/) is enough.
-* You should know the basic concepts of key-value storage engines, i.e., why we need a complex design to achieve persistence. If you have no experience with database systems and storage systems before, you can implement Bitcask in [PingCAP Talent Plan](https://github.com/pingcap/talent-plan/tree/master/courses/rust/projects/project-2).
-* Knowing the basics of an LSM tree is not a requirement, but we recommend you read something about it, e.g., the overall idea of LevelDB. Knowing them beforehand would familiarize you with concepts like mutable and immutable mem-tables, SST, compaction, WAL, etc.
+* 您应该了解 Rust 编程语言的基础知识。阅读 [Rust 书](https://doc.rust-lang.org/book/) 就足够了。
+* 您应该了解键值存储引擎的基本概念，即为什么我们需要复杂的设计来实现持久性。如果您之前没有数据库系统和存储系统的经验，您可以在 [PingCAP Talent Plan](https://github.com/pingcap/talent-plan/tree/master/courses/rust/projects/project-2) 中实现 Bitcask。
+* 了解 LSM 树的基础知识不是必需的，但我们建议您阅读一些相关内容，例如 LevelDB 的整体理念。事先了解它们将使您熟悉可变和不可变内存表、SST、压缩、WAL 等概念。
 
-## What should you expect from this course
+## 您应该从本课程中期待什么
 
-After taking this course, you should deeply understand how an LSM-based storage system works, gain hands-on experience in designing such systems, and apply what you have learned in your study and career. You will understand the design tradeoffs in such storage systems and find optimal ways to design an LSM-based storage system to meet your workload requirements/goals. This very in-depth course covers all the essential implementation details and design choices of modern storage systems (i.e., RocksDB) based on the author's experience in several LSM-like storage systems, and you will be able to directly apply what you have learned in both industry and academia.
+完成本课程后，您应该深入理解基于 LSM 的存储系统如何工作，获得设计此类系统的实践经验，并将学到的知识应用于您的学习和职业中。您将理解此类存储系统中的设计权衡，并找到设计基于 LSM 的存储系统的优化方式，以满足您的工作负载要求/目标。本课程非常深入，涵盖了现代存储系统（即 RocksDB）的所有基本实现细节和设计选择，基于作者在几个类似 LSM 的存储系统中的经验，您将能够直接在工业界和学术界应用学到的知识。
 
-### Structure
+### 结构
 
-The course is an extensive course with several parts (weeks). Each week has seven chapters; you can finish each within 2 to 3 hours. The first six chapters of each part will instruct you to build a working system, and the last chapter of each week will be a *snack time* chapter that implements some easy things over what you have built in the previous six days. Each chapter will have required tasks, *check your understanding* questions, and bonus tasks.
+本课程是一个广泛的课程，分为几个部分（周）。每周有七章；您可以在 2 到 3 小时内完成每一章。每部分的头六章将指导您构建一个工作系统，每周的最后一章将是 *小吃时间* 章，在前六天构建的基础上实现一些简单的事情。每章将有必需任务、*检查您的理解* 问题和奖励任务。
 
-### Testing
+### 测试
 
-We provide a full test suite and some CLI tools for you to validate if your solution is correct. Note that the test suite is not exhaustive, and your solution might not be 100% correct after passing all test cases. You might need to fix earlier bugs when implementing later parts of the system. We recommend you think thoroughly about your implementation, especially when there are multi-thread operations and race conditions.
+我们提供完整的测试套件和一些 CLI 工具，用于验证您的解决方案是否正确。请注意，测试套件不是详尽的，您的解决方案在通过所有测试用例后可能不是 100% 正确。当实现系统的后期部分时，您可能需要修复早期错误。我们建议您彻底思考您的实现，特别是当有多线程操作和竞争条件时。
 
-### Solution
+### 解决方案
 
-We have a solution that implements all the functionalities as required in the course in the mini-lsm main repo. At the same time, we also have a mini-lsm solution checkpoint repo where each commit corresponds to a chapter in the course. 
+我们在 mini-lsm 主仓库中有一个实现课程中所有所需功能的解决方案。同时，我们还有一个 mini-lsm 解决方案检查点仓库，其中每个提交对应课程中的一章。
 
-Keeping such a checkpoint repo up-to-date with the mini-lsm course is challenging because each bug fix or new feature must go through all commits (or checkpoints). Therefore, this repo might not use the latest starter code or incorporate the latest features from the mini-lsm course.
+保持这样的检查点仓库与 mini-lsm 课程同步更新是具有挑战性的，因为每个错误修复或新功能必须通过所有提交（或检查点）。因此，此仓库可能不使用最新的启动代码或纳入 mini-lsm 课程的最新功能。
 
-**TL;DR: We do not guarantee the solution checkpoint repo contains a correct solution, passes all tests, or has the correct doc comments.** For a correct implementation and the solution after implementing everything, please look at the solution in the main repo instead. [https://github.com/skyzh/mini-lsm/tree/main/mini-lsm](https://github.com/skyzh/mini-lsm/tree/main/mini-lsm).
+**TL;DR：我们不保证解决方案检查点仓库包含正确的解决方案、通过所有测试或具有正确的文档注释。** 对于正确的实现和实现一切后的解决方案，请查看主仓库中的解决方案。[https://github.com/skyzh/mini-lsm/tree/main/mini-lsm](https://github.com/skyzh/mini-lsm/tree/main/mini-lsm)。
 
-If you are stuck at some part of the course or need help determining where to implement functionality, you can refer to this repo for help. You may compare the diff between commits to know what has been changed. You might need to modify some functions in the mini-lsm course multiple times throughout the chapters, and you can understand what exactly is expected to be implemented for each chapter in this repo.
+如果您在课程的某个部分卡住了或需要帮助确定在哪里实现功能，您可以参考此仓库以获取帮助。您可以比较提交之间的差异，以了解发生了什么变化。您可能需要在 mini-lsm 课程中多次修改某些函数，并且您可以在此仓库中了解每个章节期望实现的确切内容。
 
-You may access the solution checkpoint repo at [https://github.com/skyzh/mini-lsm-solution-checkpoint](https://github.com/skyzh/mini-lsm-solution-checkpoint).
+您可以在 [https://github.com/skyzh/mini-lsm-solution-checkpoint](https://github.com/skyzh/mini-lsm-solution-checkpoint) 访问解决方案检查点仓库。
 
-### Feedbacks
+### 反馈
 
-Your feedback is greatly appreciated. We have rewritten the whole course from scratch in 2024 based on the feedback from the students. Please share your learning experience and help us continuously improve the course. Welcome to the [Discord community](https://skyzh.dev/join/discord) and share your experience.
+您的反馈非常宝贵。我们在 2024 年基于学生的反馈从头重写了整个课程。请分享您的学习经验，帮助我们不断改进课程。欢迎加入 [Discord 社区](https://skyzh.dev/join/discord) 并分享您的经验。
 
-The long story of why we rewrote it: The course was originally planned as a general guidance that students start from an empty directory and implement whatever they want based on the specifications we had. We had minimal tests that checked if the behavior was correct. However, the original course was too open-ended, which caused huge obstacles to the learning experience. As students do not have an overview of the whole system beforehand and the instructions are vague, sometimes it is hard for them to know why a design decision is made and what they need to achieve a goal. Some parts of the course were so compact that delivering the expected contents within just one chapter was impossible. Therefore, we completely redesigned the course for an easier learning curve and clearer learning goals. The original one-week course is now split into two weeks (the first week on storage format and the second week on deep-dive compaction), with an extra part on MVCC. We hope you find this course interesting and helpful in your study and career. We want to thank everyone who commented in [Feedback after coding day 1](https://github.com/skyzh/mini-lsm/issues/11) and [Hello, when is the next update plan for the course?](https://github.com/skyzh/mini-lsm/issues/7) -- Your feedback greatly helped us improve the course.
+为什么我们重写它的长故事：课程最初计划为一般指导，学生从空目录开始，根据我们拥有的规范实现他们想要的任何东西。我们有最少的测试来检查行为是否正确。然而，原始课程过于开放式，这对学习体验造成了巨大障碍。由于学生事先没有整个系统的概述，并且指令模糊，有时很难知道为什么做出设计决策以及需要实现什么目标。课程的一些部分过于紧凑，在一章内交付预期内容是不可能的。因此，我们完全重新设计了课程，以获得更容易的学习曲线和更清晰的学习目标。原来的一周课程现在分为两周（第一周关于存储格式，第二周深入压缩），并额外添加了 MVCC 部分。我们希望您发现本课程有趣且对您的学习和职业有帮助。我们要感谢在 [编码第 1 天后的反馈](https://github.com/skyzh/mini-lsm/issues/11) 和 [你好，下一个更新计划是什么？](https://github.com/skyzh/mini-lsm/issues/7) 中发表评论的每个人 -- 您的反馈大大帮助我们改进了课程。
 
-### License
+### 许可证
 
-The source code of this course is licensed under Apache 2.0, while the book is licensed under CC BY-NC-SA 4.0.
+本课程的源代码根据 Apache 2.0 许可证授权，而书籍根据 CC BY-NC-SA 4.0 许可证授权。
 
-### Will this course be free forever?
+### 本课程会永远免费吗？
 
-Yes! Everything publicly available now will be free forever and receive lifetime updates and bug fixes. Meanwhile, we might provide paid code review and office hour services. For the DLC part (*rest of your life* chapters), we do not have plans to finish them as of 2024 and have yet to decide whether they will be publicly available.
+是的！现在公开可用的所有内容将永远免费，并接收终身更新和错误修复。同时，我们可能会提供付费代码审查和办公时间服务。对于 DLC 部分（*余生* 章节），我们截至 2024 年还没有计划完成它们，并且尚未决定是否会公开可用。
 
-## Community
+## 社区
 
-You may join skyzh's Discord server and study with the mini-lsm community.
+您可以加入 skyzh 的 Discord 服务器，与 mini-lsm 社区一起学习。
 
-[![Join skyzh's Discord Server](discord-badge.svg)](https://skyzh.dev/join/discord)
+[![加入 skyzh 的 Discord 服务器](discord-badge.svg)](https://skyzh.dev/join/discord)
 
-## Get Started
+## 开始
 
-Now, you can get an overview of the LSM structure in [Mini-LSM Course Overview](./00-overview.md).
+现在，您可以在 [Mini-LSM 课程概述](./00-overview.md) 中获取 LSM 结构的概述。
 
-## About the Author
+## 关于作者
 
-As of writing (at the beginning of 2024), Chi obtained his master's degree in Computer Science from Carnegie Mellon University and his bachelor's degree from Shanghai Jiao Tong University. He has been working on a variety of database systems, including [TiKV][db1], [AgateDB][db2], [TerarkDB][db3], [RisingWave][db4], and [Neon][db5]. Since 2022, he has worked as a teaching assistant for [CMU's Database Systems course](https://15445.courses.cs.cmu) for three semesters on the BusTub educational system, where he added a lot of new features and more challenges to the course (check out the redesigned [query execution](https://15445.courses.cs.cmu.edu/fall2022/project3/) project and the super challenging [multi-version concurrency control](https://15445.courses.cs.cmu.edu/fall2023/project4/) project). Besides working on the BusTub educational system, he also maintains the [RisingLight](https://github.com/risinglightdb/risinglight) educational database system. Chi is interested in exploring how the Rust programming language can fit into the database world. Check out his previous course on building a vectorized expression framework [type-exercise-in-rust](https://github.com/skyzh/type-exercise-in-rust) and on building a vector database [write-you-a-vector-db](https://github.com/skyzh/write-you-a-vector-db) if you are also interested in that topic.
+截至撰写时（2024 年初），Chi 从卡内基梅隆大学获得计算机科学硕士学位，从上海交通大学获得学士学位。他曾在各种数据库系统上工作，包括 [TiKV][db1]、[AgateDB][db2]、[TerarkDB][db3]、[RisingWave][db4] 和 [Neon][db5]。自 2022 年以来，他担任 [CMU 数据库系统课程](https://15445.courses.cs.cmu) 的助教三个学期，在 BusTub 教育系统上添加了许多新功能和更多挑战（查看重新设计的 [查询执行](https://15445.courses.cs.cmu.edu/fall2022/project3/) 项目和超级具有挑战性的 [多版本并发控制](https://15445.courses.cs.cmu.edu/fall2023/project4/) 项目）。除了在 BusTub 教育系统上工作，他还维护 [RisingLight](https://github.com/risinglightdb/risinglight) 教育数据库系统。Chi 对探索 Rust 编程语言如何适应数据库世界感兴趣。如果您也对该主题感兴趣，请查看他之前的课程：构建向量化表达式框架 [type-exercise-in-rust](https://github.com/skyzh/type-exercise-in-rust) 和构建向量数据库 [write-you-a-vector-db](https://github.com/skyzh/write-you-a-vector-db)。
 
 [db1]: https://github.com/tikv/tikv
 [db2]: https://github.com/tikv/agatedb

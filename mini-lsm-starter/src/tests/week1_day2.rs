@@ -320,7 +320,6 @@ fn test_task4_integration() {
             .unwrap();
         check_lsm_iter_result_by_key(
             &mut iter,
-
             vec![(Bytes::from_static(b"3"), Bytes::from_static(b"233333"))],
         );
         assert!(!iter.is_valid());

@@ -2,62 +2,62 @@
   mini-lsm-book © 2022-2025 by Alex Chi Z is licensed under CC BY-NC-SA 4.0
 -->
 
-# Batch Write and Checksums
+# 批量写入与校验和（Batch Write and Checksums）
 
 <!-- ![Chapter Overview](./lsm-tutorial/week2-07-overview.svg) -->
 
-In the previous chapter, you already built a full LSM-based storage engine. At the end of this week, we will implement some easy but important optimizations of the storage engine. Welcome to Mini-LSM's week 2 snack time!
+在上一章中，你已经构建了一个完整的基于 LSM 的存储引擎。在本周的最后，我们将实现一些简单但重要的存储引擎优化。欢迎来到 Mini-LSM 第 2 周零食时间！
 
-In this chapter, you will:
+在本章中，你将：
 
-* Implement the batch write interface.
-* Add checksums to the blocks, SST metadata, manifest, and WALs.
+* 实现批量写入接口。
+* 为块、SST 元数据、manifest 和 WAL 添加校验和。
 
-**Note: We do not have unit tests for this chapter. As long as you pass all previous tests and ensure checksums are properly encoded in your file format, it would be fine.**
+**注意：本章没有单元测试。只要通过之前所有测试，并确保校验和在文件格式中正确编码，就算完成。**
 
-## Task 1: Write Batch Interface
+## 任务 1：批量写入接口
 
-In this task, we will prepare for week 3 of this course by adding a write batch API. You will need to modify:
+本任务中，我们为第 3 周课程做准备，添加批量写入 API。你需要修改：
 
 ```
 src/lsm_storage.rs
 ```
 
-The user provides `write_batch` with a batch of records to be written to the database. The records are `WriteBatchRecord<T: AsRef<[u8]>>`, and therefore it can be either `Bytes`, `&[u8]` or `Vec<u8>`. There are two types of records: delete and put. You may handle them in the same way as your `put` and `delete` function.
+用户通过 `write_batch` 提供一批记录写入数据库。记录类型为 `WriteBatchRecord<T: AsRef<[u8]>>`，因此可以是 `Bytes`、`&[u8]` 或 `Vec<u8>`。有两种记录类型：delete 和 put。处理方式与 `put` 和 `delete` 函数相同。
 
-After that, you may refactor your original `put` and `delete` function to call `write_batch`.
+之后，可以将原有的 `put` 和 `delete` 函数重构为调用 `write_batch`。
 
-You should pass all test cases in previous chapters after implementing this functionality.
+实现此功能后，你应通过之前所有章节的测试用例。
 
-## Task 2: Block Checksum
+## 任务 2：块校验和
 
-In this task, you will need to add a block checksum at the end of each block when encoding the SST. You will need to modify:
+本任务需要在编码 SST 时为每个块末尾添加块校验和。你需要修改：
 
 ```
 src/table/builder.rs
 src/table.rs
 ```
 
-The format of the SST will be changed to:
+SST 的格式将变更为：
 
 ```plaintext
 ---------------------------------------------------------------------------------------------------------------------------
-|                   Block Section                     |                            Meta Section                           |
+|                   Block Section（块区）                    |                       Meta Section（元数据区）               |
 ---------------------------------------------------------------------------------------------------------------------------
 | data block | checksum | ... | data block | checksum | metadata | meta block offset | bloom filter | bloom filter offset |
 |   varlen   |    u32   |     |   varlen   |    u32   |  varlen  |         u32       |    varlen    |        u32          |
 ---------------------------------------------------------------------------------------------------------------------------
 ```
 
-We use crc32 as our checksum algorithm. You can use `crc32fast::hash` to generate the checksum for the block after building a block.
+我们使用 crc32 作为校验和算法。构建块后，可以使用 `crc32fast::hash` 为块生成校验和。
 
-Usually, when user specify the target block size in the storage options, the size should include both block content and checksum. For example, if the target block size is 4096, and the checksum takes 4 bytes, the actual block content target size should be 4092. However, to avoid breaking previous test cases and for simplicity, in our course, we will **still** use the target block size as the target content size, and simply append the checksum at the end of the block.
+通常，当用户在存储选项中指定目标块大小时，该大小应包含块内容和校验和。例如，目标块大小为 4096，校验和占 4 字节，则实际块内容目标大小应为 4092。但为了避免破坏之前的测试用例并简化实现，本课程中我们仍将目标块大小作为内容目标大小，只是在块末尾追加校验和。
 
-When you read the block, you should verify the checksum in `read_block` correctly generate the slices for the block content. You should pass all test cases in previous chapters after implementing this functionality.
+读取块时，应在 `read_block` 中验证校验和，并正确生成块内容的切片。实现此功能后，你应通过之前所有章节的测试用例。
 
-## Task 3: SST Meta Checksum
+## 任务 3：SST 元数据校验和
 
-In this task, you will need to add a block checksum for bloom filters and block metadata:
+本任务需要为布隆过滤器和块元数据添加块校验和：
 
 ```
 src/table.rs
@@ -67,57 +67,57 @@ src/table/builder.rs
 
 ```plaintext
 ----------------------------------------------------------------------------------------------------------
-|                                                Meta Section                                            |
+|                                              Meta Section（元数据区）                                    |
 ----------------------------------------------------------------------------------------------------------
 | no. of block | metadata | checksum | meta block offset | bloom filter | checksum | bloom filter offset |
 |     u32      |  varlen  |    u32   |        u32        |    varlen    |    u32   |        u32          |
 ----------------------------------------------------------------------------------------------------------
 ```
 
-You will need to add a checksum at the end of the bloom filter in `Bloom::encode` and `Bloom::decode`. Note that most of our APIs take an existing buffer that the implementation will write into, for example, `Bloom::encode`. Therefore, you should record the offset of the beginning of the bloom filter before writing the encoded content, and only checksum the bloom filter itself instead of the whole buffer.
+需要在 `Bloom::encode` 和 `Bloom::decode` 中在布隆过滤器末尾添加校验和。注意大多数 API 接受一个现有的缓冲区供实现写入，例如 `Bloom::encode`。因此，应在写入编码内容之前记录布隆过滤器开始的偏移量，只对布隆过滤器本身而非整个缓冲区计算校验和。
 
-After that, you can add a checksum at the end of block metadata. You might find it helpful to also add a length of metadata at the beginning of the section, so that it will be easier to know where to stop when decoding the block metadata.
+之后，可以在块元数据末尾添加校验和。在元数据区开头添加元数据的长度可能有助于在解码块元数据时知道何时停止。
 
-## Task 4: WAL Checksum
+## 任务 4：WAL 校验和
 
-In this task, you will need to modify:
+本任务需要修改：
 
 ```
 src/wal.rs
 ```
 
-We will do a per-record checksum in the write-ahead log. To do this, you have two choices:
+我们将在 WAL 中对每条记录单独计算校验和。有两种选择：
 
-* Generate a buffer of the key-value record, and use `crc32fast::hash` to compute the checksum at once.
-* Write one field at a time (e.g., key length, key slice), and use a `crc32fast::Hasher` to compute the checksum incrementally on each field.
+* 生成键值记录的缓冲区，使用 `crc32fast::hash` 一次性计算校验和。
+* 逐字段写入（如键长、键切片），使用 `crc32fast::Hasher` 对每个字段增量计算校验和。
 
-This is up to your choice and you will need to *choose your own adventure*. Both method should produce exactly the same result, as long as you handle little endian / big endian correctly. The new WAL encoding should be like:
+你可以自由选择，只要正确处理大小端，两种方法的结果应该完全相同。新的 WAL 编码格式如下：
 
 ```
 | key_len | key | value_len | value | checksum |
 ```
 
-## Task 5: Manifest Checksum
+## 任务 5：Manifest 校验和
 
-Lastly, let us add a checksum on the manifest file. Manifest is similar to a WAL, except that previously, we do not store the length of each record. To make the implementation easier, we now add a header of record length at the beginning of a record, and add a checksum at the end of the record.
+最后，为 manifest 文件添加校验和。Manifest 类似于 WAL，但之前我们没有存储每条记录的长度。为了简化实现，现在在每条记录开头添加记录长度头，在末尾添加校验和。
 
-The new manifest format is like:
+新的 manifest 格式如下：
 
 ```
 | len | JSON record | checksum | len | JSON record | checksum | len | JSON record | checksum |
 ```
 
-After implementing everything, you should pass all previous test cases. We do not provide new test cases in this chapter.
+实现完所有内容后，你应通过之前所有测试用例。本章不提供新的测试用例。
 
-## Test Your Understanding
+## 理解检验
 
-* Consider the case that an LSM storage engine only provides `write_batch` as the write interface (instead of single put + delete). Is it possible to implement it as follows: there is a single write thread with an mpsc channel receiver to get the changes, and all threads send write batches to the write thread. The write thread is the single point to write to the database. What are the pros/cons of this implementation? (Congrats if you do so you get BadgerDB!)
-* Is it okay to put all block checksums altogether at the end of the SST file instead of store it along with the block? Why?
+* 考虑这样的场景：LSM 存储引擎只提供 `write_batch` 作为写接口（而非单独的 put + delete）。可以这样实现：有一个单写线程，通过 mpsc 通道接收器获取更改，所有其他线程将写批次发送给写线程，写线程是写入数据库的唯一入口。这种实现有什么优缺点？（恭喜，如果你这么做了，你就得到了 BadgerDB！）
+* 将所有块校验和集中存放在 SST 文件末尾（而不是与块一起存储）是否可以？为什么？
 
-We do not provide reference answers to the questions, and feel free to discuss about them in the Discord community.
+以上问题不提供参考答案，欢迎在 Discord 社区中讨论。
 
-## Bonus Tasks
+## 进阶任务
 
-* **Recovering when Corruption**. If there is a checksum error, open the database in a safe mode so that no writes can be performed and non-corrupted data can still be retrieved.
+* **损坏时恢复。** 如果发生校验和错误，以安全模式打开数据库，禁止写入，但仍允许检索未损坏的数据。
 
 {{#include copyright.md}}

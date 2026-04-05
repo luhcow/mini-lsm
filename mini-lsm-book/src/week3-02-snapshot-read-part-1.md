@@ -2,29 +2,29 @@
   mini-lsm-book © 2022-2025 by Alex Chi Z is licensed under CC BY-NC-SA 4.0
 -->
 
-# Snapshot Read - Memtables and Timestamps
+# 快照读（第一部分）——Memtable 与时间戳
 
-In this chapter, you will:
+在本章中，你将：
 
-* Refactor your memtable/WAL to store multiple versions of a key.
-* Implement the new engine write path to assign each key a timestamp.
-* Make your compaction process aware of multi-version keys.
-* Implement the new engine read path to return the latest version of a key.
+* 重构 memtable/WAL 以存储键的多个版本。
+* 实现新的引擎写路径，为每个键分配时间戳。
+* 让压缩过程感知多版本键。
+* 实现新的引擎读路径，返回键的最新版本。
 
-During the refactor, you might need to change the signature of some functions from `&self` to `self: &Arc<Self>` as necessary.
+重构过程中，可能需要根据需要将某些函数的签名从 `&self` 改为 `self: &Arc<Self>`。
 
-To run test cases,
+运行测试用例：
 
 ```
 cargo x copy-test --week 3 --day 2
 cargo x scheck
 ```
 
-**Note: You will also need to pass everything <= 2.4 after finishing this chapter.**
+**注意：完成本章后，你还需要通过 2.4 及之前所有测试用例。**
 
-## Task 1: MemTable, Write-Ahead Log, and Read Path
+## 任务 1：MemTable、预写日志与读路径
 
-In this task, you will need to modify:
+本任务需要修改：
 
 ```
 src/wal.rs
@@ -32,9 +32,9 @@ src/mem_table.rs
 src/lsm_storage.rs
 ```
 
-We have already made most of the keys in the engine to be a `KeySlice`, which contains a bytes key and a timestamp. However, some part of our system still did not consider the timestamps. In our first task, you will need to modify your memtable and WAL implementation to take timestamps into account.
+我们已经将引擎中大多数键改为 `KeySlice`（包含字节键和时间戳），但系统的某些部分仍未考虑时间戳。在第一个任务中，你需要修改 memtable 和 WAL 实现以考虑时间戳。
 
-You will need to first change the type of the `SkipMap` stored in your memtable.
+首先需要修改 memtable 中 `SkipMap` 的类型：
 
 ```rust,no_run
 pub struct MemTable {
@@ -44,17 +44,17 @@ pub struct MemTable {
 }
 ```
 
-After that, you can continue to fix all compiler errors so as to complete this task.
+之后，修复所有编译错误以完成本任务。
 
 **MemTable::get**
 
-We keep the get interface so that the test cases can still probe a specific version of a key in the memtable. This interface should not be used in your read path after finishing this task. Given that we store `KeyBytes`, which is `(Bytes, u64)` in the skiplist, while the user probe the `KeySlice`, which is `(&[u8], u64)`. We have to find a way to convert the latter to a reference of the former, so that we can retrieve the data in the skiplist.
+保留 get 接口是为了让测试用例仍能在 memtable 中探测特定版本的键。完成本任务后，读路径中不应再使用此接口。鉴于跳表中存储的是 `KeyBytes`（即 `(Bytes, u64)`），而用户探测的是 `KeySlice`（即 `(&[u8], u64)`），我们需要找到一种方式将后者转换为前者的引用，以便在跳表中检索数据。
 
-To do this, you may use unsafe code to force cast the `&[u8]` to be static and use `Bytes::from_static` to create a bytes object from a static slice. This is sound because `Bytes` will not try to free the memory of the slice as it is assumed static.
+为此，可以使用 unsafe 代码强制将 `&[u8]` 转换为 static，并使用 `Bytes::from_static` 从 static 切片创建 bytes 对象。这是合理的，因为 `Bytes` 会假定切片是 static 的，不会尝试释放切片的内存。
 
 <details>
 
-<summary>Spoilers: Convert u8 slice to Bytes</summary>
+<summary>提示：将 u8 切片转换为 Bytes</summary>
 
 ```rust,no_run
 Bytes::from_static(unsafe { std::mem::transmute(key.key_ref()) })
@@ -62,93 +62,93 @@ Bytes::from_static(unsafe { std::mem::transmute(key.key_ref()) })
 
 </details>
 
-This was not a problem because what we had before is `Bytes` and `&[u8]`, where `Bytes` implements `Borrow<[u8]>`.
+之前没有这个问题是因为我们使用 `Bytes` 和 `&[u8]`，而 `Bytes` 实现了 `Borrow<[u8]>`。
 
 **MemTable::put**
 
-The signature should be changed to `fn put(&self, key: KeySlice, value: &[u8])` and You will need to convert a key slice to a `KeyBytes` in your implementation.
+签名应改为 `fn put(&self, key: KeySlice, value: &[u8])`，你需要在实现中将键切片转换为 `KeyBytes`。
 
 **MemTable::scan**
 
-The signature should be changed to `fn scan(&self, lower: Bound<KeySlice>, upper: Bound<KeySlice>) -> MemTableIterator`. You will need to convert `KeySlice` to `KeyBytes` and use these as `SkipMap::range` parameters.
+签名应改为 `fn scan(&self, lower: Bound<KeySlice>, upper: Bound<KeySlice>) -> MemTableIterator`。你需要将 `KeySlice` 转换为 `KeyBytes`，并将它们用作 `SkipMap::range` 的参数。
 
 **MemTable::flush**
 
-Instead of using the default timestamp, you should now use the key timestamp when flushing the memtable to the SST.
+现在应使用键的时间戳而不是默认时间戳来刷写 memtable 到 SST。
 
 **MemTableIterator**
 
-It should now store `(KeyBytes, Bytes)` and the return key type should be `KeySlice`.
+现在应存储 `(KeyBytes, Bytes)`，返回键类型应为 `KeySlice`。
 
-**Wal::recover** and **Wal::put**
+**Wal::recover 和 Wal::put**
 
-Write-ahead log should now accept a key slice instead of a user key slice. When serializing and deserializing the WAL record, you should put timestamp into the WAL file and do checksum over the timestamp and all other fields you had before.
+预写日志现在应接受键切片而非用户键切片。序列化和反序列化 WAL 记录时，应将时间戳放入 WAL 文件，并对时间戳和之前所有字段一起计算校验和。
 
-The WAL format is as follows:
+WAL 格式如下：
 
 ```
-| key_len (exclude ts len) (u16) | key | ts (u64) | value_len (u16) | value | checksum (u32) |
+| key_len（不含 ts 长度）(u16) | key | ts (u64) | value_len (u16) | value | checksum (u32) |
 ```
 
 **LsmStorageInner::get**
 
-Previously, we implement `get` as first probe the memtables and then scan the SSTs. Now that we change the memtable to use the new key-ts APIs, we will need to re-implement the `get` interface. The easiest way to do this is to create a merge iterator over everything we have -- memtables, immutable memtables, L0 SSTs, and other level SSTs, the same as what you have done in `scan`, except that we do a bloom filter filtering over the SSTs.
+之前 `get` 的实现是先探测 memtable，然后扫描 SST。现在 memtable 改用了新的 key-ts API，需要重新实现 `get` 接口。最简单的方式是对所有内容（memtable、不可变 memtable、L0 SST 以及其他层 SST）创建合并迭代器，就像 `scan` 中做的那样，只是对 SST 进行了布隆过滤器过滤。
 
 **LsmStorageInner::scan**
 
-You will need to incorporate the new memtable APIs, and you should set the scan range to be `(user_key_begin, TS_RANGE_BEGIN)` and `(user_key_end, TS_RANGE_END)`. Note that when you handle the exclude boundary, you will need to correctly position the iterator to the next key (instead of the current key of the same timestamp).
+需要使用新的 memtable API，扫描范围设为 `(user_key_begin, TS_RANGE_BEGIN)` 和 `(user_key_end, TS_RANGE_END)`。注意处理排除边界时，需要将迭代器正确定位到下一个键（而不是相同时间戳的当前键）。
 
-## Task 2: Write Path
+## 任务 2：写路径
 
-In this task, you will need to modify:
+本任务需要修改：
 
 ```
 src/lsm_storage.rs
 ```
 
-We have an `mvcc` field in `LsmStorageInner` that includes all data structures we need to use for multi-version concurrency control in this week. When you open a directory and initialize the storage engine, you will need to create that structure.
+`LsmStorageInner` 中有一个 `mvcc` 字段，包含本周 MVCC 需要使用的所有数据结构。打开目录并初始化存储引擎时，需要创建该结构。
 
-In your `write_batch` implementation, you will need to obtain a commit timestamp for all keys in a write batch. You can get the timestamp by using `self.mvcc().latest_commit_ts() + 1` at the beginning of the logic, and `self.mvcc().update_commit_ts(ts)` at the end of the logic to increment the next commit timestamp. To ensure all write batches have different timestamps and new keys are placed on top of old keys, you will need to hold a write lock `self.mvcc().write_lock.lock()` at the beginning of the function, so that only one thread can write to the storage engine at the same time.
+在 `write_batch` 实现中，需要为写批次中的所有键获取提交时间戳。可以在逻辑开始时使用 `self.mvcc().latest_commit_ts() + 1` 获取时间戳，在逻辑结束时使用 `self.mvcc().update_commit_ts(ts)` 递增下一个提交时间戳。为确保所有写批次有不同的时间戳且新键位于旧键之上，需要在函数开始时持有写锁 `self.mvcc().write_lock.lock()`，以确保同一时间只有一个线程能写入存储引擎。
 
-## Task 3: MVCC Compaction
+## 任务 3：MVCC 压缩
 
-In this task, you will need to modify:
+本任务需要修改：
 
 ```
 src/compact.rs
 ```
 
-What we had done in previous chapters is to only keep the latest version of a key and remove a key when we compact the key to the bottom level if the key is removed. With MVCC, we now have timestamps associated with the keys, and we cannot use the same logic for compaction. 
+之前的做法是：只保留键的最新版本，当键被压缩到最底层且被删除时，移除该键。有了 MVCC，键现在关联了时间戳，不能再使用相同的压缩逻辑。
 
-In this chapter, you may simply remove the logic to remove the keys. You may ignore `compact_to_bottom_level` for now, and you should keep ALL versions of a key during the compaction.
+本章中，可以简单地移除删除键的逻辑，暂时忽略 `compact_to_bottom_level`，在压缩时保留**所有版本**的键。
 
-Also, you will need to implement the compaction algorithm in a way that the same key with different timestamps are put in the same SST file, *even if* it exceeds the SST size limit. This ensures that if a key is found in an SST in a level, it will not be in other SST files in that level, and therefore simplifying the implementation of many parts of the system.
+此外，需要以这样一种方式实现压缩算法：即使超过 SST 大小限制，相同键的不同时间戳版本也应放在同一个 SST 文件中。这确保如果某层的一个 SST 中找到了某个键，该键就不会出现在该层的其他 SST 文件中，从而简化系统许多部分的实现。
 
-## Task 4: LSM Iterator
+## 任务 4：LSM 迭代器
 
-In this task, you will need to modify:
+本任务需要修改：
 
 ```
 src/lsm_iterator.rs
 ```
 
-In the previous chapter, we implemented the LSM iterator to act as viewing the same key with different timestamps as different keys. Now, we will need to refactor the LSM iterator to only return the latest version of a key if multiple versions of the keys are retrieved from the child iterator.
+上一章中，LSM 迭代器被实现为将同一键的不同时间戳视为不同键。现在需要重构 LSM 迭代器，使其在从子迭代器获取到多个版本时只返回键的最新版本。
 
-You will need to record `prev_key` in the iterator. If we already returned the latest version of a key to the user, we can skip all old versions and proceed to the next key.
+需要在迭代器中记录 `prev_key`。如果已经向用户返回了键的最新版本，可以跳过所有旧版本并继续到下一个键。
 
-At this point, you should pass all tests in previous chapters except persistence tests (2.5 and 2.6).
+此时，你应该通过之前所有章节的测试用例（持久化测试 2.5 和 2.6 除外）。
 
-## Test Your Understanding
+## 理解检验
 
-* What is the difference of `get` in the MVCC engine and the engine you built in week 2?
-* In week 2, you stop at the first memtable/level where a key is found when `get`. Can you do the same in the MVCC version?
-* How do you convert `KeySlice` to `&KeyBytes`? Is it a safe/sound operation?
-* Why do we need to take a write lock in the write path?
+* MVCC 引擎中的 `get` 与你在第 2 周构建的引擎中的 `get` 有什么区别？
+* 在第 2 周，`get` 时在第一个找到键的 memtable/层就停止。在 MVCC 版本中可以这样做吗？
+* 如何将 `KeySlice` 转换为 `&KeyBytes`？这是安全/合理的操作吗？
+* 为什么需要在写路径中持有写锁？
 
-We do not provide reference answers to the questions, and feel free to discuss about them in the Discord community.
+以上问题不提供参考答案，欢迎在 Discord 社区中讨论。
 
-## Bonus Tasks
+## 进阶任务
 
-* **Early Stop for Memtable Gets**. Instead of creating a merge iterator over all memtables and SSTs, we can implement `get` as follows: If we find a version of a key in the memtable, we can stop searching. The same applies to SSTs.
+* **Memtable Get 提前终止。** 不必对所有 memtable 和 SST 创建合并迭代器，可以这样实现 `get`：如果在 memtable 中找到键的某个版本，就停止查找。对 SST 同样适用。
 
 {{#include copyright.md}}

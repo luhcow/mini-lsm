@@ -2,16 +2,16 @@
   mini-lsm-book © 2022-2025 by Alex Chi Z is licensed under CC BY-NC-SA 4.0
 -->
 
-# Leveled Compaction Strategy
+# 分层压缩策略（Leveled Compaction Strategy）
 
 ![Chapter Overview](./lsm-tutorial/week2-04-leveled.svg)
 
-In this chapter, you will:
+在本章中，你将：
 
-* Implement a leveled compaction strategy and simulate it on the compaction simulator.
-* Incorporate leveled compaction strategy into the system.
+* 实现分层压缩策略，并在压缩模拟器上进行仿真。
+* 将分层压缩策略集成到系统中。
 
-To copy the test cases into the starter code and run them,
+将测试用例复制到 starter 代码并运行：
 
 ```
 cargo x copy-test --week 2 --day 4
@@ -20,69 +20,69 @@ cargo x scheck
 
 <div class="warning">
 
-It might be helpful to take a look at [week 2 overview](./week2-overview.md) before reading this chapter to have a general overview of compactions.
+在阅读本章之前，建议先查看[第 2 周概览](./week2-overview.md)，以全面了解压缩的概念。
 
 </div>
 
-## Task 1: Leveled Compaction
+## 任务 1：分层压缩
 
-In chapter 2 day 2, you have implemented the simple leveled compaction strategies. However, the implementation has a few problems:
+在第 2 周第 2 天，你实现了简单分层压缩策略。但该实现存在几个问题：
 
-* Compaction always include a full level. Note that you cannot remove the old files until you finish the compaction, and therefore, your storage engine might use 2x storage space while the compaction is going on (if it is a full compaction). Tiered compaction has the same problem. In this chapter, we will implement partial compaction that we select one SST from the upper level for compaction, instead of the full level.
-* SSTs may be compacted across empty levels. As you have seen in the compaction simulator, when the LSM state is empty, and the engine flushes some L0 SSTs, these SSTs will be first compacted to L1, then from L1 to L2, etc. An optimal strategy is to directly place the SST from L0 to the lowest level possible, so as to avoid unnecessary write amplification.
+* 压缩总是包含整个层。注意在压缩完成前不能删除旧文件，因此存储引擎在压缩进行时可能使用高达 2 倍的存储空间（如果是全量压缩）。分级压缩也有同样的问题。在本章中，我们将实现部分压缩：每次只从上层选择一个 SST 进行压缩，而不是整个层。
+* SST 可能跨越空层进行压缩。如你在压缩模拟器中所见，当 LSM 状态为空且引擎刷写一些 L0 SST 时，这些 SST 会先压缩到 L1，再从 L1 压缩到 L2，依此类推。最优策略是直接将 SST 从 L0 放到尽可能低的层，以避免不必要的写放大。
 
-In this chapter, you will implement a production-ready leveled compaction strategy. The strategy is the same as RocksDB's leveled compaction. You will need to modify:
+本章你将实现一个生产级的分层压缩策略，与 RocksDB 的分层压缩相同。你需要修改：
 
 ```
 src/compact/leveled.rs
 ```
 
-To run the compaction simulator,
+运行压缩模拟器：
 
 ```
 cargo run --bin compaction-simulator leveled
 ```
 
-### Task 1.1: Compute Target Sizes
+### 任务 1.1：计算目标大小
 
-In this compaction strategy, you will need to know the first/last key of each SST and the size of the SSTs. The compaction simulator will set up some mock SSTs for you to access.
+在此压缩策略中，你需要知道每个 SST 的第一个/最后一个键以及 SST 的大小。压缩模拟器会为你设置一些模拟 SST 以供访问。
 
-You will need to compute the target sizes of the levels. Assume `base_level_size_mb` is 200MB and the number of levels (except L0) is 6. When the LSM state is empty, the target sizes will be:
+你需要计算各层的目标大小。假设 `base_level_size_mb` 为 200MB，层数（不含 L0）为 6。当 LSM 状态为空时，目标大小为：
 
 ```
 [0 0 0 0 0 200MB]
 ```
 
-Before the bottom level exceeds `base_level_size_mb`, all other intermediate levels will have target sizes of 0. The idea is that when the total amount of data is small, it's wasteful to create intermediate levels.
+在最底层超过 `base_level_size_mb` 之前，所有其他中间层的目标大小为 0。这样做的目的是：当数据总量较小时，创建中间层是浪费的。
 
-When the bottom level reaches or exceeds `base_level_size_mb`, we will compute the target size of the other levels by dividing the `level_size_multiplier` from the size. Assume the bottom level contains 300MB of data, and `level_size_multiplier=10`.
+当最底层达到或超过 `base_level_size_mb` 时，通过除以 `level_size_multiplier` 来计算其他层的目标大小。假设最底层包含 300MB 数据，`level_size_multiplier=10`：
 
 ```
 0 0 0 0 30MB 300MB
 ```
 
-In addition, at most *one* level can have a positive target size below `base_level_size_mb`. Assume we now have 30GB files in the last level, the target sizes will be,
+此外，最多只有*一层*可以有低于 `base_level_size_mb` 的正目标大小。假设最后一层现在有 30GB 文件，目标大小为：
 
 ```
 0 0 30MB 300MB 3GB 30GB
 ```
 
-Notice in this case L1 and L2 have target size of 0, and L3 is the only level with a positive target size below `base_level_size_mb`.
+注意此时 L1 和 L2 的目标大小为 0，L3 是唯一目标大小为正且低于 `base_level_size_mb` 的层。
 
-### Task 1.2: Decide Base Level
+### 任务 1.2：决定基础层
 
-Now, let us solve the problem that SSTs may be compacted across empty levels in the simple leveled compaction strategy. When we compact L0 SSTs with lower levels, we do not directly put it to L1. Instead, we compact it with the first level with `target size > 0`. For example, when the target level sizes are:
+现在解决简单分层压缩策略中 SST 可能跨越空层压缩的问题。压缩 L0 SST 与更低层时，不直接放到 L1，而是压缩到第一个**目标大小 > 0**的层。例如，目标层大小为：
 
 ```
 0 0 0 0 30MB 300MB
 ```
 
-We will compact L0 SSTs with L5 SSTs if the number of L0 SSTs reaches the `level0_file_num_compaction_trigger` threshold.
+如果 L0 SST 数量达到 `level0_file_num_compaction_trigger` 阈值，则将 L0 SST 与 L5 SST 合并。
 
-Now, you can generate L0 compaction tasks and run the compaction simulator.
+现在可以生成 L0 压缩任务并运行压缩模拟器：
 
 ```
---- After Flush ---
+--- 刷写后 ---
 L0 (1): [23]
 L1 (0): []
 L2 (0): []
@@ -91,7 +91,7 @@ L4 (6): [11, 12, 7, 8, 9, 10]
 
 ...
 
---- After Flush ---
+--- 刷写后 ---
 L0 (2): [102, 103]
 L1 (0): []
 L2 (0): []
@@ -99,20 +99,20 @@ L3 (18): [42, 65, 86, 87, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 61, 62, 52, 34
 L4 (6): [11, 12, 7, 8, 9, 10]
 ```
 
-The number of levels in the compaction simulator is 4. Therefore, the SSTs should be directly flushed to L3/L4.
+压缩模拟器中层数为 4，因此 SST 应直接刷写到 L3/L4。
 
-### Task 1.3: Decide Level Priorities
+### 任务 1.3：决定层优先级
 
-Now that we will need to handle compactions below L0. L0 compaction always has the top priority, thus you should compact L0 with other levels first if it reaches the threshold. After that, we can compute the compaction priorities of each level by `current_size / target_size`. We only compact levels with this ratio `> 1.0` The one with the largest ratio will be chosen for compaction with the lower level. For example, if we have:
+现在需要处理 L0 以下各层的压缩。L0 压缩总是具有最高优先级，如果达到阈值则应优先压缩 L0 与其他层。之后，可以通过 `current_size / target_size` 计算每层的压缩优先级。只压缩该比率 `> 1.0` 的层，比率最大的那层将与下一层进行压缩。例如：
 
 ```
-L3: 200MB, target_size=20MB
-L4: 202MB, target_size=200MB
-L5: 1.9GB, target_size=2GB
-L6: 20GB, target_size=20GB
+L3: 200MB，target_size=20MB
+L4: 202MB，target_size=200MB
+L5: 1.9GB，target_size=2GB
+L6: 20GB，target_size=20GB
 ```
 
-The priority of compaction will be:
+压缩优先级：
 
 ```
 L3: 200MB/20MB = 10.0
@@ -120,22 +120,22 @@ L4: 202MB/200MB = 1.01
 L5: 1.9GB/2GB = 0.95
 ```
 
-L3 and L4 needs to be compacted with their lower level respectively, while L5 does not. And L3 has a larger ratio, and therefore we will produce a compaction task of L3 and L4. After the compaction is done, it is likely that we will schedule compactions of L4 and L5.
+L3 和 L4 分别需要与其下一层压缩，L5 不需要。L3 的比率更大，因此生成 L3 和 L4 的压缩任务。压缩完成后，很可能会再调度 L4 和 L5 的压缩。
 
-### Task 1.4: Select SST to Compact
+### 任务 1.4：选择要压缩的 SST
 
-Now, let us solve the problem that compaction always include a full level from the simple leveled compaction strategy. When we decide to compact two levels, we always select the oldest SST from the upper level. You can know the time that the SST is produced by comparing the SST id.
+现在解决简单分层压缩策略中总是压缩整个层的问题。决定压缩两层时，总是从上层选择**最旧的** SST。你可以通过比较 SST id 来确定 SST 的生产时间。
 
-There are other ways of choosing the compacting SST, for example, by looking into the number of delete tombstones. You can implement this as part of the bonus task.
+也可以用其他启发式方法选择待压缩的 SST，例如查看删除墓碑的数量，这可以作为进阶任务实现。
 
-After you choose the upper level SST, you will need to find all SSTs in the lower level with overlapping keys of the upper level SST. Then, you can generate a compaction task that contain exactly one SST in the upper level and overlapping SSTs in the lower level.
+选择上层的 SST 后，需要找出下层中所有与上层 SST 键范围重叠的 SST，然后生成一个包含上层恰好一个 SST 和下层重叠 SST 的压缩任务。
 
-When the compaction completes, you will need to remove the SSTs from the state and insert new SSTs into the correct place. Note that you should keep SST ids ordered by first keys in all levels except L0.
+压缩完成后，需要从状态中删除这些 SST，并将新 SST 插入正确位置。注意，除 L0 外所有层中的 SST id 应按第一个键排序。
 
-Running the compaction simulator, you should see:
+运行压缩模拟器，你应该看到：
 
 ```
---- After Compaction ---
+--- 压缩后 ---
 L0 (0): []
 L1 (4): [222, 223, 208, 209]
 L2 (5): [206, 196, 207, 212, 165]
@@ -143,52 +143,52 @@ L3 (11): [166, 120, 143, 144, 179, 148, 167, 140, 189, 180, 190]
 L4 (22): [113, 85, 86, 36, 46, 37, 146, 100, 147, 203, 102, 103, 65, 81, 105, 75, 82, 95, 96, 97, 152, 153]
 ```
 
-The sizes of the levels should be kept under the level multiplier ratio. And the compaction task:
+各层大小应保持在层乘数比率以内。压缩任务：
 
 ```
 Upper L1 [224.sst 7cd080e..=33d79d04]
 Lower L2 [210.sst 1c657df4..=31a00e1b, 211.sst 31a00e1c..=46da9e43] -> [228.sst 7cd080e..=1cd18f74, 229.sst 1cd18f75..=31d616db, 230.sst 31d616dc..=46da9e43]
 ```
 
-...should only have one SST from the upper layer.
+……上层应只有一个 SST。
 
-**Note: we do not provide fine-grained unit tests for this part. You can run the compaction simulator and compare with the output of the reference solution to see if your implementation is correct.**
+**注意：本部分没有细粒度的单元测试。你可以运行压缩模拟器并与参考答案的输出进行对比，以验证你的实现是否正确。**
 
-## Task 2: Integrate with the Read Path
+## 任务 2：与读路径集成
 
-In this task, you will need to modify:
+本任务需要修改：
 
 ```
 src/compact.rs
 src/lsm_storage.rs
 ```
 
-The implementation should be similar to simple leveled compaction. Remember to change both get/scan read path and the compaction iterators.
+实现方式与简单分层压缩类似。记得同时修改 get/scan 读路径和压缩迭代器。
 
-## Related Readings
+## 扩展阅读
 
 [Leveled Compaction - RocksDB Wiki](https://github.com/facebook/rocksdb/wiki/Leveled-Compaction)
 
-## Test Your Understanding
+## 理解检验
 
-* What is the estimated write amplification of leveled compaction?
-* What is the estimated read amplification of leveled compaction?
-* Finding a good key split point for compaction may potentially reduce the write amplification, or it does not matter at all? (Consider that case that the user write keys beginning with some prefixes, `00` and `01`. The number of keys under these two prefixes are different and their write patterns are different. If we can always split `00` and `01` into different SSTs...)
-* Imagine that a user was using tiered (universal) compaction before and wants to migrate to leveled compaction. What might be the challenges of this migration? And how to do the migration?
-* And if we do it reversely, what if the user wants to migrate from leveled compaction to tiered compaction?
-* What happens if compaction speed cannot keep up with the SST flushes for leveled compaction?
-* What might needs to be considered if the system schedules multiple compaction tasks in parallel?
-* What is the peak storage usage for leveled compaction? Compared with universal compaction?
-* Is it true that with a lower `level_size_multiplier`, you can always get a lower write amplification?
-* What needs to be done if a user not using compaction at all decides to migrate to leveled compaction?
-* Some people propose to do intra-L0 compaction (compact L0 tables and still put them in L0) before pushing them to lower layers. What might be the benefits of doing so? (Might be related: [PebblesDB SOSP'17](https://www.cs.utexas.edu/~vijay/papers/sosp17-pebblesdb.pdf))
-* Consider the case that the upper level has two tables of `[100, 200], [201, 300]` and the lower level has `[50, 150], [151, 250], [251, 350]`. In this case, do you still want to compact one file in the upper level at a time? Why?
+* 分层压缩的估计写放大是多少？
+* 分层压缩的估计读放大是多少？
+* 为压缩选择合适的键分割点是否能潜在地降低写放大，还是无关紧要？（考虑用户以某些前缀写键，例如 `00` 和 `01`，这两个前缀下的键数量不同且写模式不同。如果能始终将 `00` 和 `01` 分到不同的 SST……）
+* 假设用户之前使用分级（通用）压缩，现在想迁移到分层压缩。这个迁移可能面临哪些挑战？如何进行迁移？
+* 反过来，如果用户想从分层压缩迁移到分级压缩呢？
+* 如果分层压缩中压缩速度跟不上 SST 刷写速度，会发生什么？
+* 如果系统并行调度多个压缩任务，需要考虑哪些问题？
+* 分层压缩的峰值存储使用量是多少？与通用压缩相比呢？
+* `level_size_multiplier` 越小，写放大是否一定越低？
+* 如果一个没有使用压缩的用户决定迁移到分层压缩，需要做什么？
+* 有人建议在将 L0 表推向更低层之前先进行层内 L0 压缩（压缩 L0 表并仍放在 L0）。这样做有什么好处？（可能相关：[PebblesDB SOSP'17](https://www.cs.utexas.edu/~vijay/papers/sosp17-pebblesdb.pdf)）
+* 考虑上层有两个表 `[100, 200], [201, 300]`，下层有 `[50, 150], [151, 250], [251, 350]`。在这种情况下，是否仍然想每次只压缩上层的一个文件？为什么？
 
-We do not provide reference answers to the questions, and feel free to discuss about them in the Discord community.
+以上问题不提供参考答案，欢迎在 Discord 社区中讨论。
 
-## Bonus Tasks
+## 进阶任务
 
-* **SST Ingestion.** A common optimization of data migration / batch import in LSM trees is to ask the upstream to generate SST files of their data, and directly place these files in the LSM state without going through the write path.
-* **SST Selection.** Instead of selecting the oldest SST, you may think of other heuristics to choose the SST to compact.
+* **SST 注入。** 数据迁移/批量导入的一种常见优化是让上游生成数据的 SST 文件，并直接将这些文件放入 LSM 状态，而无需经过写路径。
+* **SST 选择。** 除了选择最旧的 SST，还可以考虑其他启发式方法来选择待压缩的 SST。
 
 {{#include copyright.md}}

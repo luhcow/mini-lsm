@@ -2,15 +2,15 @@
   mini-lsm-book © 2022-2025 by Alex Chi Z is licensed under CC BY-NC-SA 4.0
 -->
 
-# Snack Time: Compaction Filters
+# 零食时间：压缩过滤器（Compaction Filters）
 
-Congratulations! You made it there! In the previous chapter, you made your LSM engine multi-version capable, and the users can use transaction APIs to interact with your storage engine. At the end of this week, we will implement some easy but important features of the storage engine. Welcome to Mini-LSM's week 3 snack time!
+恭喜！你做到了！在上一章中，你让 LSM 引擎支持了多版本，用户可以通过事务 API 与你的存储引擎交互。在本周的最后，我们将实现一些简单但重要的存储引擎特性。欢迎来到 Mini-LSM 第 3 周零食时间！
 
-In this chapter, we will generalize our compaction garbage collection logic to become compaction filters.
+在本章中，我们将把压缩垃圾回收逻辑泛化为压缩过滤器。
 
-For now, our compaction will simply retain the keys above the watermark and the latest version of the keys below the watermark. We can add some magic to the compaction process to help the user collect some unused data automatically as a background job.
+目前，我们的压缩只保留高于 watermark 的键，以及低于（含）watermark 的键的最新版本。我们可以在压缩过程中加入一些"魔法"，帮助用户在后台作业中自动清理某些未使用的数据。
 
-Consider a case that the user uses Mini-LSM to store database tables. Each row in the table are prefixed with the table name. For example,
+考虑用户使用 Mini-LSM 存储数据库表的情况。表中的每行都以表名为前缀，例如：
 
 ```
 table1_key1 -> row
@@ -20,31 +20,31 @@ table2_key1 -> row
 table2_key2 -> row
 ```
 
-Now the user executes `DROP TABLE table1`. The engine will need to clean up all the data beginning with `table1`.
+现在用户执行 `DROP TABLE table1`，引擎需要清理所有以 `table1` 开头的数据。
 
-There are a lot of ways to achieve the goal. The user of Mini-LSM can scan all the keys beginning with `table1` and requests the engine to delete it. However, scanning a very large database might be slow, and it will generate the same number of delete tombstones as the existing keys. Therefore, scan-and-delete will not free up the space occupied by the dropped table -- instead, it will add more data to the engine and the space can only be reclaimed when the tombstones reach the bottom level of the engine.
+有很多方法可以实现这个目标。Mini-LSM 的用户可以扫描所有以 `table1` 开头的键并请求引擎删除它们。但是，扫描一个非常大的数据库可能很慢，而且会生成与现有键数量相同的删除墓碑。因此，扫描并删除不会释放被删除表占用的空间——相反，它会向引擎添加更多数据，而空间只有在墓碑到达引擎最底层时才能被回收。
 
-Or, they can create column families (we will talk about this in *rest of your life* chapter). They store each table in a column family, which is a standalone LSM state, and directly remove the SST files corresponding to the column family when the user drop the table.
+或者，可以创建列族（我们将在*余生*章节讨论）。将每个表存储在一个列族中，即一个独立的 LSM 状态，在用户删除表时直接删除对应列族的 SST 文件。
 
-In this course, we will implement the third approach: compaction filters. Compaction filters can be dynamically added to the engine at runtime. During the compaction, if a key matching the compaction filter is found, we can silently remove it in the background. Therefore, the user can attach a compaction filter of `prefix=table1` to the engine, and all these keys will be removed during compaction.
+在本课程中，我们将实现第三种方法：压缩过滤器。压缩过滤器可以在运行时动态添加到引擎中。在压缩过程中，如果发现匹配压缩过滤器的键，可以在后台静默删除它。因此，用户可以向引擎附加一个 `prefix=table1` 的压缩过滤器，所有这些键将在压缩时被删除。
 
-## Task 1: Compaction Filter
+## 任务 1：压缩过滤器
 
-In this task, you will need to modify:
+本任务需要修改：
 
 ```
 src/compact.rs
 ```
 
-You can iterate all compaction filters in `LsmStorageInner::compaction_filters`. If the first version of the key below watermark matches the compaction filter, simply remove it instead of keeping it in the SST file.
+可以遍历 `LsmStorageInner::compaction_filters` 中的所有压缩过滤器。如果低于 watermark 的键的第一个版本匹配压缩过滤器，直接删除它而不是保留在 SST 文件中。
 
-To run test cases,
+运行测试用例：
 
 ```
 cargo x copy-test --week 3 --day 7
 cargo x scheck
 ```
 
-You can assume that the user will not get the keys within the prefix filter range. And, they will not scan the keys in the prefix range. Therefore, it is okay to return a wrong value when a user requests the keys in the prefix filter range (i.e., undefined behavior).
+可以假设用户不会 get 前缀过滤器范围内的键，也不会 scan 该前缀范围内的键。因此，当用户请求前缀过滤器范围内的键时，返回错误值是可以接受的（即未定义行为）。
 
 {{#include copyright.md}}

@@ -2,88 +2,86 @@
   mini-lsm-book © 2022-2025 by Alex Chi Z is licensed under CC BY-NC-SA 4.0
 -->
 
-# Manifest
+# Manifest（清单文件）
 
 ![Chapter Overview](./lsm-tutorial/week2-05-overview.svg)
 
-In this chapter, you will:
+在本章中，你将：
 
-* Implement encoding and decoding of the manifest file.
-* Recover from the manifest when the system restarts.
+* 实现 manifest 文件的编解码。
+* 在系统重启时从 manifest 恢复状态。
 
-To copy the test cases into the starter code and run them,
+将测试用例复制到 starter 代码并运行：
 
 ```
 cargo x copy-test --week 2 --day 5
 cargo x scheck
 ```
 
-## Task 1: Manifest Encoding
+## 任务 1：Manifest 编码
 
-The system uses a manifest file to record all operations happened in the engine. Currently, there are only two types of them: compaction and SST flush. When the engine restarts, it will read the manifest file, reconstruct the state, and load the SST files on the disk.
+系统使用 manifest 文件记录引擎中发生的所有操作。目前只有两种类型：压缩和 SST 刷写。引擎重启时会读取 manifest 文件，重建状态，并加载磁盘上的 SST 文件。
 
-There are many approaches to storing the LSM state. One of the easiest way is to simply store the full state into a JSON file. Every time we do a compaction or flush a new SST, we can serialize the entire LSM state into a file. The problem with this approach is that when the database gets super large (i.e., 10k SSTs), writing the manifest to the disk would be super slow. Therefore, we designed the manifest to be a append-only file.
+存储 LSM 状态有很多方法。最简单的方式是将完整状态存储到 JSON 文件中。每次进行压缩或刷写新 SST 时，将整个 LSM 状态序列化到文件中。这种方式的问题是，当数据库非常大时（如 10k 个 SST），写 manifest 到磁盘会非常慢。因此，我们将 manifest 设计为仅追加文件。
 
-In this task, you will need to modify:
+本任务需要修改：
 
 ```
 src/manifest.rs
 ```
 
-We encode the manifest records using JSON. You may use `serde_json::to_vec` to encode a manifest record to a json, write it to the manifest file, and do a fsync. When you read from the manifest file, you may use `serde_json::Deserializer::from_slice` and it will return a stream of records. You do not need to store the record length or so, as `serde_json` can automatically find the split of the records.
+我们使用 JSON 对 manifest 记录进行编码。可以使用 `serde_json::to_vec` 将 manifest 记录编码为 JSON，写入 manifest 文件，然后执行 fsync。读取 manifest 文件时，可以使用 `serde_json::Deserializer::from_slice`，它会返回一个记录流，不需要存储每条记录的长度，`serde_json` 能自动找到记录的分界。
 
-
-The manifest format is like:
+Manifest 格式如下：
 
 ```
 | JSON record | JSON record | JSON record | JSON record |
 ```
 
-Again, note that we do not record the information of how many bytes each record has.
+注意，我们不记录每条记录的字节数。
 
-After the engine runs for several hours, the manifest file might get very large. At that time, you may periodically compact the manifest file to store the current snapshot and truncate the logs. This is an optimization you may implement as part of bonus tasks.
+引擎运行数小时后，manifest 文件可能会变得很大。这时可以定期压缩 manifest 文件，只存储当前快照并截断日志。这可以作为进阶任务实现。
 
+## 任务 2：写入 Manifest
 
-## Task 2: Write Manifests
-
-You can now go ahead and modify your LSM engine to write manifests when necessary. In this task, you will need to modify:
+现在可以修改 LSM 引擎，在必要时写入 manifest。本任务需要修改：
 
 ```
 src/lsm_storage.rs
 src/compact.rs
 ```
 
-For now, we only use two types of the manifest records: SST flush and compaction. SST flush record stores the SST id that gets flushed to the disk. Compaction record stores the compaction task and the produced SST ids. Every time you write some new files to the disk, first sync the files and the storage directory, and then write to the manifest and sync the manifest. The manifest file should be written to `<path>/MANIFEST`.
+目前只使用两种类型的 manifest 记录：SST 刷写和压缩。SST 刷写记录存储被刷写到磁盘的 SST id。压缩记录存储压缩任务和生成的 SST id。每次向磁盘写入新文件时，先同步文件和存储目录，然后写入 manifest 并同步 manifest。Manifest 文件应写入 `<path>/MANIFEST`。
 
-To sync the directory, you may implement the `sync_dir` function, where you can use `File::open(dir).sync_all()?` to sync it. On Linux, directory is a file that contains the list of files in the directory. By doing fsync on the directory, you will ensure that the newly-written (or removed) files can be visible to the user if the power goes off.
+同步目录可以通过实现 `sync_dir` 函数完成，使用 `File::open(dir).sync_all()?`。在 Linux 上，目录也是文件，包含目录中的文件列表。对目录执行 fsync 可以确保在断电的情况下新写入（或删除）的文件对用户可见。
 
-Remember to write a compaction manifest record for both the background compaction trigger (leveled/simple/universal) and when the user requests to do a force compaction.
+记得为后台压缩触发器（分层/简单/通用）和用户请求的强制压缩都写入压缩 manifest 记录。
 
-## Task 3: Flush on Close
+## 任务 3：关闭时刷写
 
-In this task, you will need to modify:
-
-```
-src/lsm_storage.rs
-```
-
-You will need to implement the `close` function. If `self.options.enable_wal = false` (we will cover WAL in the next chapter), you should flush all memtables to the disk before stopping the storage engine, so that all user changes will be persisted.
-
-## Task 4: Recover from the State
-
-In this task, you will need to modify:
+本任务需要修改：
 
 ```
 src/lsm_storage.rs
 ```
 
-Now, you may modify the `open` function to recover the engine state from the manifest file. To recover it, you will need to first generate the list of SSTs you will need to load. You can do this by calling `apply_compaction_result` and recover SST ids in the LSM state. After that, you may iterate the state and load all SSTs (update the sstables hash map). During the process, you will need to compute the maximum SST id and update the `next_sst_id` field. After that, you may create a new memtable using that id and increment the id by one.
+你需要实现 `close` 函数。如果 `self.options.enable_wal = false`（下一章介绍 WAL），在停止存储引擎之前应将所有 memtable 刷写到磁盘，以确保所有用户更改都被持久化。
 
-If you have implemented leveled compaction, you might have sorted the SSTs every time you apply the compaction result. However, with manifest recover, your sorting logic will be broken, because during the recovery process, you cannot know the start key and the end key of each of the SST. To resolve this, you will need to read the `in_recovery` flag of the `apply_compaction_result` function. During the recovery process, you should not attempt to retrieve the first key of the SST. After the LSM state is recovered and all SSTs are opened, you can do a sorting at the end of the recovery process.
+## 任务 4：从状态恢复
 
-Optionally, you may include the start key and the end key of each of the SSTs in the manifest. This strategy is used in RocksDB/BadgerDB, so that you do not need to distinguish the recovery mode and the normal mode during the compaction apply process.
+本任务需要修改：
 
-You may use the mini-lsm-cli to test your implementation.
+```
+src/lsm_storage.rs
+```
+
+现在可以修改 `open` 函数，从 manifest 文件恢复引擎状态。恢复时需要首先生成需要加载的 SST 列表，可以通过调用 `apply_compaction_result` 并恢复 LSM 状态中的 SST id 来实现。之后，可以遍历状态并加载所有 SST（更新 sstables 哈希映射）。在此过程中，需要计算最大 SST id 并更新 `next_sst_id` 字段。之后，可以使用该 id 创建新的 memtable，并将 id 加 1。
+
+如果你实现了分层压缩，每次应用压缩结果时可能都对 SST 进行了排序。但是在 manifest 恢复时，你的排序逻辑会出问题，因为恢复过程中无法知道每个 SST 的起始键和结束键。解决方法是读取 `apply_compaction_result` 函数的 `in_recovery` 标志。在恢复过程中，不应尝试获取 SST 的第一个键。LSM 状态恢复完毕且所有 SST 打开后，可以在恢复过程结束时进行一次排序。
+
+或者，可以在 manifest 中包含每个 SST 的起始键和结束键。RocksDB/BadgerDB 使用了这种策略，这样在压缩应用过程中就无需区分恢复模式和正常模式。
+
+可以使用 mini-lsm-cli 测试你的实现：
 
 ```
 cargo run --bin mini-lsm-cli
@@ -93,17 +91,17 @@ cargo run --bin mini-lsm-cli
 get 1500
 ```
 
-## Test Your Understanding
+## 理解检验
 
-* When do you need to call `fsync`? Why do you need to fsync the directory?
-* What are the places you will need to write to the manifest?
-* Consider an alternative implementation of an LSM engine that does not use a manifest file. Instead, it records the level/tier information in the header of each file, scans the storage directory every time it restarts, and recover the LSM state solely from the files present in the directory. Is it possible to correctly maintain the LSM state in this implementation and what might be the problems/challenges with that?
-* Currently, we create all SST/concat iterators before creating the merge iterator, which means that we have to load the first block of the first SST in all levels into memory before starting the scanning process. We have start/end key in the manifest, and is it possible to leverage this information to delay the loading of the data blocks and make the time to return the first key-value pair faster?
-* Is it possible not to store the tier/level information in the manifest? i.e., we only store the list of SSTs we have in the manifest without the level information, and rebuild the tier/level using the key range and timestamp information (SST metadata).
+* 什么时候需要调用 `fsync`？为什么需要对目录执行 fsync？
+* 在哪些地方需要写入 manifest？
+* 考虑一种不使用 manifest 文件的 LSM 引擎替代实现：将层/tier 信息记录在每个文件的头部，每次重启时扫描存储目录，仅从目录中存在的文件恢复 LSM 状态。这种实现能正确维护 LSM 状态吗？可能面临哪些问题/挑战？
+* 目前，我们在创建合并迭代器之前先创建所有 SST/拼接迭代器，这意味着在开始扫描过程之前必须将所有层中第一个 SST 的第一个块加载到内存。manifest 中有起始/结束键信息，是否可以利用这些信息延迟数据块的加载，使返回第一个键值对的时间更快？
+* 是否可以不在 manifest 中存储 tier/层信息？即只在 manifest 中存储 SST 列表，通过键范围和时间戳信息（SST 元数据）重建 tier/层？
 
-## Bonus Tasks
+## 进阶任务
 
-* **Manifest Compaction.** When the number of logs in the manifest file gets too large, you can rewrite the manifest file to only store the current snapshot and append new logs to that file.
-* **Parallel Open.** After you collect the list of SSTs to open, you can open and decode them in parallel, instead of doing it one by one, therefore accelerating the recovery process.
+* **Manifest 压缩。** 当 manifest 文件中的日志数量过多时，可以重写 manifest 文件，只存储当前快照，并将新日志追加到该文件。
+* **并行打开。** 收集到需要打开的 SST 列表后，可以并行打开和解码它们，而不是逐个处理，从而加速恢复过程。
 
 {{#include copyright.md}}

@@ -2,101 +2,100 @@
   mini-lsm-book © 2022-2025 by Alex Chi Z is licensed under CC BY-NC-SA 4.0
 -->
 
-# Week 2 Overview: Compaction and Persistence
+# 第 2 周概览：压缩与持久化
 
 ![Chapter Overview](./lsm-tutorial/week2-overview.svg)
 
-In the last week, you have implemented all necessary structures for an LSM storage engine, and your storage engine already supports read and write interfaces. In this week, we will deep dive into the disk organization of the SST files and investigate an optimal way to achieve both performance and cost efficiency in the system. We will spend 4 days learning different compaction strategies, from the easiest to the most complex ones, and then implement the remaining parts for the storage engine persistence. At the end of this week, you will have a fully functional and efficient LSM storage engine.
+上周你实现了 LSM 存储引擎所需的所有结构，你的存储引擎已经支持读写接口。本周我们将深入研究 SST 文件的磁盘组织，探索在系统中同时实现高性能与低成本的最优方式。我们将用 4 天时间学习从最简单到最复杂的不同压缩策略，然后实现存储引擎持久化所需的其余部分。本周结束时，你将拥有一个功能完整、高效的 LSM 存储引擎。
 
-We have 7 chapters (days) in this part:
+本部分共有 7 章（天）：
 
+* [第 1 天：压缩实现](./week2-01-compaction.md)。你将把所有 L0 SST 合并为一个有序运行。
+* [第 2 天：简单分层压缩](./week2-02-simple.md)。你将实现经典的分层压缩算法，并使用压缩模拟器观察其效果。
+* [第 3 天：分级/通用压缩](./week2-03-tiered.md)。你将实现 RocksDB 的通用压缩算法，并理解其优缺点。
+* [第 4 天：分层压缩](./week2-04-leveled.md)。你将实现 RocksDB 的分层压缩算法。该压缩算法还支持部分压缩，以降低峰值空间使用量。
+* [第 5 天：Manifest](./week2-05-manifest.md)。你将把 LSM 状态存储到磁盘并从中恢复。
+* [第 6 天：预写日志（WAL）](./week2-06-wal.md)。用户请求将同时路由到 memtable 和 WAL，以持久化所有操作。
+* [第 7 天：批量写入与校验和](./week2-07-snacks.md)。你将实现批量写入 API（为第 3 周 MVCC 做准备），并为所有存储格式添加校验和。
 
-* [Day 1: Compaction Implementation](./week2-01-compaction.md). You will merge all L0 SSTs into a sorted run.
-* [Day 2: Simple Leveled Compaction](./week2-02-simple.md). You will implement a classic leveled compaction algorithm and use compaction simulator to see how well it works.
-* [Day 3: Tiered/Universal Compaction](./week2-03-tiered.md). You will implement the RocksDB universal compaction algorithm and understand the pros/cons.
-* [Day 4: Leveled Compaction](./week2-04-leveled.md). You will implement the RocksDB leveled compaction algorithm. This compaction algorithm also supports partial compaction, so as to reduce peak space usage.
-* [Day 5: Manifest](./week2-05-manifest.md). You will store the LSM state on the disk and recover from the state.
-* [Day 6: Write-Ahead Log (WAL)](./week2-06-wal.md). User requests will be routed to both memtable and WAL so that all operations will be persisted.
-* [Day 7: Write Batch and Checksums](./week2-07-snacks.md). You will implement write batch API (for preparation for week 3 MVCC) and checksums for all of your storage formats.
+## 压缩与读放大
 
-## Compaction and Read Amplification
+先来说说压缩。在上一部分中，你只是将 memtable 刷写为 L0 SST。想象一下，如果你写入了几 GB 数据，现在有 100 个 SST。每次读请求（没有过滤的情况下）需要从这 100 个 SST 中各读取一个块。这种放大就是**读放大**——为了一次 get 操作需要向磁盘发送的 I/O 请求数量。
 
-Let us talk about compaction first. In the previous part, you simply flush the memtable to an L0 SST. Imagine that you have written gigabytes of data and now you have 100 SSTs. Every read request (without filtering) will need to read 100 blocks from these SSTs. This amplification is read amplification -- the number of I/O requests you will need to send to the disk for one get operation.
+为了降低读放大，可以将所有 L0 SST 合并为更大的结构，使得可能只需读取一个 SST 和一个块就能获取请求的数据。假设我们仍有这 100 个 SST，现在对它们进行归并排序，生成另外 100 个 SST，每个 SST 包含不重叠的键范围。这个过程就是**压缩（compaction）**，这 100 个不重叠的 SST 就是一个**有序运行（sorted run）**。
 
-To reduce read amplification, we can merge all the L0 SSTs into a larger structure, so that it would be possible to only read one SST and one block to retrieve the requested data. Say that we still have these 100 SSTs, and now, we do a merge sort of these 100 SSTs to produce another 100 SSTs, each of them contains non-overlapping key ranges. This process is **compaction**, and these 100 non-overlapping SSTs is a **sorted run**.
-
-To make this process clearer, let us take a look at this concrete example:
-
-```
-SST 1: key range 00000 - key 10000, 1000 keys
-SST 2: key range 00005 - key 10005, 1000 keys
-SST 3: key range 00010 - key 10010, 1000 keys
-```
-
-We have 3 SSTs in the LSM structure. If we need to access key 02333, we will need to probe all of these 3 SSTs. If we can do a compaction, we might get the following 3 new SSTs:
+让我们通过一个具体例子来说明这个过程：
 
 ```
-SST 4: key range 00000 - key 03000, 1000 keys
-SST 5: key range 03001 - key 06000, 1000 keys
-SST 6: key range 06000 - key 10010, 1000 keys
+SST 1: 键范围 00000 - 10000，1000 个键
+SST 2: 键范围 00005 - 10005，1000 个键
+SST 3: 键范围 00010 - 10010，1000 个键
 ```
 
-The 3 new SSTs are created by merging SST 1, 2, and 3. We can get a sorted 3000 keys and then split them into 3 files, so as to avoid having a super large SST file. Now our LSM state has 3 non-overlapping SSTs, and we only need to access SST 4 to find key 02333.
+LSM 结构中有 3 个 SST。如果需要访问键 02333，需要探测所有 3 个 SST。进行压缩后，可能得到以下 3 个新 SST：
 
-## Two Extremes of Compaction and Write Amplification
+```
+SST 4: 键范围 00000 - 03000，1000 个键
+SST 5: 键范围 03001 - 06000，1000 个键
+SST 6: 键范围 06000 - 10010，1000 个键
+```
 
-So from the above example, we have 2 naive ways of handling the LSM structure -- not doing compactions at all, and always do full compaction when new SSTs are flushed.
+这 3 个新 SST 是合并 SST 1、2、3 后得到的。我们将排好序的 3000 个键拆分成 3 个文件，避免产生超大 SST 文件。现在 LSM 状态中有 3 个不重叠的 SST，只需访问 SST 4 就能找到键 02333。
 
-Compaction is a time-consuming operation. It will need to read all data from some files, and write the same amount of files to the disk. This operation takes a lot of CPU resources and I/O resources. Not doing compactions at all leads to high read amplification, but it does not need to write new files. Always doing full compaction reduces the read amplification, but it will need to constantly rewrite the files on the disk.
+## 压缩的两种极端与写放大
+
+从上面的例子可以看出，有两种极端的 LSM 结构处理方式：完全不压缩，以及每次刷写新 SST 时都进行全量压缩。
+
+压缩是耗时操作，需要从文件读取所有数据，然后将等量的数据写入磁盘，消耗大量 CPU 和 I/O 资源。完全不压缩导致高读放大，但不需要写入新文件。总是进行全量压缩可以降低读放大，但需要不断重写磁盘上的文件。
 
 ![no compaction](./lsm-tutorial/week2-00-two-extremes-1.svg)
 
-<p class="caption">No Compaction at All</p>
+<p class="caption">完全不压缩</p>
 
 ![always full compaction](./lsm-tutorial/week2-00-two-extremes-2.svg)
 
-<p class="caption">Always compact when new SST being flushed</p>
+<p class="caption">每次刷写新 SST 时都进行压缩</p>
 
-The ratio of memtables flushed to the disk versus total data written to the disk is write amplification. That is to say, no compaction has a write amplification ratio of 1x, because once the SSTs are flushed to the disk, they will stay there. Always doing compaction has a very high write amplification. If we do a full compaction every time we get an SST, the data written to the disk will be quadratic to the number of SSTs flushed. For example, if we flushed 100 SSTs to the disk, we will do compactions of 2 files, 3 files, ..., 100 files, where the actual total amount of data we wrote to the disk is about 5000 SSTs. The write amplification after writing 100 SSTs in this cause would be 50x.
+刷写到磁盘的 memtable 与写入磁盘的总数据之比就是**写放大**。完全不压缩的写放大为 1x，因为 SST 刷写到磁盘后就留在那里不会再被重写。总是进行压缩的写放大非常高。如果每次获得 SST 都进行全量压缩，写入磁盘的数据量是刷写 SST 数量的二次方级别。例如，刷写了 100 个 SST，压缩会涉及 2 个文件、3 个文件……100 个文件，实际写入磁盘的总数据约为 5000 个 SST，写放大约为 50x。
 
-A good compaction strategy can balance read amplification, write amplification, and space amplification (we will talk about it soon). In a general-purpose LSM storage engine, it is generally impossible to find a strategy that can achieve the lowest amplification in all 3 of these factors, unless there are some specific data pattern that the engine could use. The good thing about LSM is that we can theoretically analyze the amplifications of a compaction strategy and all these things happen in the background. We can choose compaction strategies and dynamically change some parameters of them to adjust our storage engine to the optimal state. Compaction strategies are all about tradeoffs, and LSM-based storage engine enables us to select what to be traded at runtime.
+好的压缩策略能在读放大、写放大和空间放大（稍后介绍）之间取得平衡。对于通用 LSM 存储引擎，通常不可能找到一种在所有 3 个放大因子上都最优的策略，除非有特定的数据模式可以利用。LSM 的好处在于理论上可以分析压缩策略的放大因子，而这一切都在后台发生。我们可以选择压缩策略，动态调整参数，将存储引擎调整到最优状态。压缩策略都是权衡取舍，LSM 使我们能够在运行时选择牺牲什么。
 
 ![compaction tradeoffs](./lsm-tutorial/week2-00-triangle.svg)
 
-One typical workload in the industry is like: the user first batch ingests data into the storage engine, usually gigabytes per second, when they start a product. Then, the system goes live and users start doing small transactions over the system. In the first phase, the engine should be able to quickly ingest data, and therefore we can use a compaction strategy that minimize write amplification to accelerate this process. Then, we adjust the parameters of the compaction algorithm to make it optimized for read amplification, and do a full compaction to reorder existing data, so that the system can run stably when it goes live.
+行业中一个典型的工作负载是：用户在产品上线时先进行大量数据的批量导入（每秒 GB 级），然后系统上线后用户开始进行小事务操作。在第一阶段，引擎应能快速摄取数据，因此可以使用最小化写放大的压缩策略加速该过程。然后调整压缩算法的参数，优化读放大，并进行一次全量压缩以重组现有数据，使系统在上线后能稳定运行。
 
-If the workload is like a time-series database, it is possible that the user always populate and truncate data by time. Therefore, even if there is no compaction, these append-only data can still have low amplification on the disk. Therefore, in real life, you should watch for patterns or specific requirements from the users, and use these information to optimize your system.
+如果工作负载是时序数据库，用户可能总是按时间追加和截断数据。因此，即使没有压缩，这种只追加的数据在磁盘上也能保持较低的放大。因此，在实际使用中，应关注用户的数据模式或特定需求，利用这些信息优化系统。
 
-## Compaction Strategies Overview
+## 压缩策略概览
 
-Compaction strategies usually aim to control the number of sorted runs, so as to keep read amplification in a reasonable amount of number. There are generally two categories of compaction strategies: leveled and tiered.
+压缩策略通常旨在控制有序运行的数量，以使读放大保持在合理范围内。压缩策略大致分为两类：分层（leveled）和分级（tiered）。
 
-In leveled compaction, the user can specify a maximum number of levels, which is the number of sorted runs in the system (except L0). For example, RocksDB usually keeps 6 levels (sorted runs) in leveled compaction mode. During the compaction process, SSTs from two adjacent levels will be merged and then the produced SSTs will be put to the lower level of the two levels. Therefore, you will usually see a small sorted run merged with a large sorted run in leveled compaction. The sorted runs (levels) grow exponentially in size -- the lower level will be `<some number>` of the upper level in size.
+在分层压缩中，用户可以指定最大层数，即系统中有序运行的数量（不含 L0）。例如，RocksDB 在分层压缩模式下通常保持 6 层（有序运行）。在压缩过程中，来自相邻两层的 SST 会被合并，生成的 SST 放入两层中较低的那层。因此，在分层压缩中通常看到小有序运行与大有序运行合并。各有序运行（层）的大小呈指数增长——下层比上层大`某个数`倍。
 
 ![leveled compaction](./lsm-tutorial/week2-00-leveled.svg)
 
-In tiered compaction, the engine will dynamically adjust the number of sorted runs by merging them or letting new SSTs flushed as new sorted run (a tier) to minimize write amplification. In this strategy, you will usually see the engine merge two equally-sized sorted runs. The number of tiers can be high if the compaction strategy does not choose to merge tiers, therefore making read amplification high. In this course, we will implement RocksDB's universal compaction, which is a kind of tiered compaction strategy.
+在分级压缩中，引擎通过合并有序运行或允许新 SST 刷写为新有序运行（tier）来动态调整有序运行的数量，以最小化写放大。在该策略中，通常看到两个大小相近的有序运行被合并。如果压缩策略不选择合并 tier，tier 的数量可能会很高，从而导致读放大高。在本课程中，我们将实现 RocksDB 的通用压缩，这是一种分级压缩策略。
 
 ![tiered compaction](./lsm-tutorial/week2-00-tiered.svg)
 
-## Space Amplification
+## 空间放大
 
-The most intuitive way to compute space amplification is to divide the actual space used by the LSM engine by the user space usage (i.e., database size, number of rows in the database, etc.) . The engine will need to store delete tombstones, and sometimes multiple version of the same key if compaction is not happening frequently enough, therefore causing space amplification.
+计算空间放大最直观的方法是将 LSM 引擎实际使用的空间除以用户空间使用量（即数据库大小、数据库中的行数等）。引擎需要存储删除墓碑，有时还需要存储同一键的多个版本（如果压缩不够频繁），从而导致空间放大。
 
-On the engine side, it is usually hard to know the exact amount of data the user is storing, unless we scan the whole database and see how many dead versions are there in the engine. Therefore, one way of estimating the space amplification is to divide the full storage file size by the last level size. The assumption behind this estimation method is that the insertion and deletion rate of a workload should be the same after the user fills the initial data. We assume the user-side data size does not change, and therefore the last level contains the snapshot of the user data at some point, and the upper levels contain new changes. When compaction merges everything to the last level, we can get a space amplification factor of 1x using this estimation method.
+在引擎侧，通常很难知道用户实际存储了多少数据，除非扫描整个数据库查看有多少已废弃的版本。因此，估算空间放大的一种方法是将完整存储文件大小除以最后一层的大小。这种估算方法的假设是：在用户填入初始数据后，工作负载的插入和删除速率应该相同。我们假设用户侧数据大小不变，因此最后一层包含某个时间点的用户数据快照，上层包含尚未压缩到最后一层的新改动。当压缩将所有内容合并到最后一层时，使用此估算方法可以得到 1x 的空间放大因子。
 
-Note that compaction also takes space -- you cannot remove files being compacted before the compaction is complete. If you do a full compaction of the database, you will need free storage space as much as the current engine file size.
+注意压缩本身也需要空间——在压缩完成前不能删除正在压缩的文件。如果对数据库进行全量压缩，你需要的空闲存储空间与当前引擎文件大小一样多。
 
-In this part, we will have a compaction simulator to help you visualize the compaction process and the decision of your compaction algorithm. We provide minimal test cases to check the properties of your compaction algorithm, and you should watch closely on the statistics and the output of the compaction simulator to know how well your compaction algorithm works.
+在本部分中，我们将使用压缩模拟器帮助你可视化压缩过程和压缩算法的决策。我们提供最少的测试用例来检查压缩算法的属性，你应该密切关注压缩模拟器的统计信息和输出，以了解你的压缩算法效果如何。
 
-## Persistence
+## 持久化
 
-After implementing the compaction algorithms, we will implement two key components in the system: manifest, which is a file that stores the LSM state, and WAL, which persists memtable data to the disk before it is flushed as an SST. After finishing these two components, the storage engine will have full persistence support and can be used in your products.
+实现压缩算法后，我们将实现系统中的两个关键组件：manifest（存储 LSM 状态的文件）和 WAL（在 memtable 刷写为 SST 之前将数据持久化到磁盘）。完成这两个组件后，存储引擎将具有完整的持久化支持，可以用于你的产品。
 
-If you do not want to dive too deep into compactions, you can also finish chapter 2.1 and 2.2 to implement a very simple leveled compaction algorithm, and directly go for the persistence part. Implementing full leveled compaction and universal compaction are not required to build a working storage engine in week 2.
+如果不想深入研究压缩，也可以只完成第 2.1 章和 2.2 章来实现一个非常简单的分层压缩算法，然后直接进入持久化部分。在第 2 周中，不要求实现完整的分层压缩和通用压缩。
 
-## Snack Time
+## 零食时间
 
-After implementing compaction and persistence, we will have a short chapter on implementing the batch write interface and checksums.
+实现压缩和持久化后，我们将用一个简短的章节实现批量写入接口和校验和。
 
 {{#include copyright.md}}
